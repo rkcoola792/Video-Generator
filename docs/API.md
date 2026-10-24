@@ -14,7 +14,13 @@ This document describes the HTTP API exposed by the app. The machine-readable co
 
 ## Authentication
 
-The local learning build can use a single local user. Keep the API boundary ready for authenticated sessions; never expose provider secrets or Instagram tokens to the browser. Public registration and multi-user roles are outside the v1 contract.
+- `POST /api/v1/auth/register` accepts `email`, `password`, and optional `displayName`; a successful registration starts a session.
+- `POST /api/v1/auth/login` accepts `email` and `password` and starts a session.
+- `GET /api/v1/auth/session` returns the signed-in user's id, email, and display name.
+- `POST /api/v1/auth/logout` revokes the current session.
+- The browser session is an HTTP-only, SameSite cookie. All project, generation, media, and render endpoints require a valid session.
+- Project list and save operations are scoped to the authenticated account. Never accept an owner id from the browser as proof of ownership.
+- Public registration is enabled for the local learning prototype. Email verification, password reset, and external identity providers are not implemented yet.
 
 ## Endpoint map
 

@@ -6,6 +6,7 @@ import { LessonBrief } from './components/LessonBrief';
 import { StoryboardEditor } from './components/StoryboardEditor';
 import { StudioSidebar } from './components/StudioSidebar';
 import { VideoPreview } from './components/VideoPreview';
+import { AuthScreen } from './components/AuthScreen';
 
 type LessonDraft = {
   id: string;
@@ -16,63 +17,35 @@ type LessonDraft = {
   voiceId: string;
   scenes: Scene[];
   voiceover: Voiceover | null;
+  renderId?: string;
   updatedAt: number;
 };
 
-const draftsKey = 'little-lessons-drafts';
-const activeDraftKey = 'little-lessons-active-draft';
-
-const setting = (key: string, fallback: string) => {
-  try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; }
-};
-
-function savedScenes(): Scene[] {
-  try { const value = localStorage.getItem('little-lessons-scenes'); return value ? JSON.parse(value) as Scene[] : []; }
-  catch { return []; }
-}
-
-function savedVoiceover(): Voiceover | null {
-  try { const value = localStorage.getItem('little-lessons-voiceover'); return value ? JSON.parse(value) as Voiceover : null; }
-  catch { return null; }
-}
-
-function savedDrafts(): LessonDraft[] {
-  try {
-    const value = localStorage.getItem(draftsKey);
-    if (value) {
-      const parsed = JSON.parse(value) as LessonDraft[];
-      if (Array.isArray(parsed) && parsed.length) return parsed.map(draft => draft.topic === 'A new little lesson' ? { ...draft, topic: '', scenes: [], voiceover: null } : draft);
-    }
-    return [{
-      id: 'starter', topic: setting('little-lessons-topic', ''),
-      audience: setting('little-lessons-audience', 'Kids') as LearnerAudience,
-      targetDuration: Number(setting('little-lessons-duration', '30')),
-      tone: setting('little-lessons-tone', 'friendly') as NarrationTone,
-      voiceId: savedVoiceover()?.voiceId ?? '',
-      scenes: savedScenes(), voiceover: savedVoiceover(), updatedAt: Date.now(),
-    }];
-  } catch { return [{ id: 'starter', topic: '', audience: 'Kids', targetDuration: 30, tone: 'friendly', voiceId: '', scenes: [], voiceover: null, updatedAt: Date.now() }]; }
-}
+type Account = { id: string; email: string; displayName: string };
+const blankDraft = (id = crypto.randomUUID()): LessonDraft => ({ id, topic: '', audience: 'Kids', targetDuration: 30, tone: 'friendly', voiceId: '', scenes: [], voiceover: null, updatedAt: Date.now() });
 
 export default function App() {
-  const [drafts, setDrafts] = useState<LessonDraft[]>(savedDrafts);
+  const [authState, setAuthState] = useState<'loading' | 'signed_out' | 'signed_in'>('loading');
+  const [account, setAccount] = useState<Account | null>(null);
+  const [projectsReady, setProjectsReady] = useState(false);
+  const [drafts, setDrafts] = useState<LessonDraft[]>([]);
   const [voices, setVoices] = useState<Array<{ voiceId: string; name: string }>>([]);
-  const [activeDraftId, setActiveDraftId] = useState(() => setting(activeDraftKey, 'starter'));
-  const activeDraft = drafts.find(draft => draft.id === activeDraftId) ?? drafts[0];
+  const [activeDraftId, setActiveDraftId] = useState('');
+  const activeDraft = drafts.find(draft => draft.id === activeDraftId) ?? drafts[0] ?? blankDraft('00000000-0000-4000-8000-000000000001');
   const { scenes, audience, topic, targetDuration, tone, voiceover } = activeDraft;
   const voiceId = activeDraft.voiceId || voiceover?.voiceId || voices[0]?.voiceId || '';
   const updateDraft = (changes: Partial<LessonDraft>) => setDrafts(current => current.map(draft => draft.id === activeDraft.id ? { ...draft, ...changes, updatedAt: Date.now() } : draft));
   const setScenes = (value: Scene[] | ((current: Scene[]) => Scene[])) => updateDraft({ scenes: typeof value === 'function' ? value(activeDraft.scenes) : value });
   const setAudience = (value: LearnerAudience) => updateDraft({ audience: value });
-  const setTopic = (value: string) => { updateDraft({ topic: value, voiceover: null }); setRenderDownloadUrl(''); };
+  const setTopic = (value: string) => { updateDraft({ topic: value, voiceover: null, renderId: undefined }); setRenderDownloadUrl(''); };
   const changeTopic = (value: string) => {
-    updateDraft({ topic: value, scenes: value.trim() === topic.trim() ? scenes : [], voiceover: null });
+    updateDraft({ topic: value, scenes: value.trim() === topic.trim() ? scenes : [], voiceover: null, renderId: undefined });
     setSelectedScene(0); setRenderDownloadUrl('');
   };
   const setTargetDuration = (value: number) => updateDraft({ targetDuration: value });
-  const setTone = (value: NarrationTone) => { updateDraft({ tone: value, voiceover: null }); setRenderDownloadUrl(''); };
-  const setVoiceId = (value: string) => { updateDraft({ voiceId: value, voiceover: null }); setRenderDownloadUrl(''); };
-  const setVoiceover = (value: Voiceover | null) => updateDraft({ voiceover: value });
+  const setTone = (value: NarrationTone) => { updateDraft({ tone: value, voiceover: null, renderId: undefined }); setRenderDownloadUrl(''); };
+  const setVoiceId = (value: string) => { updateDraft({ voiceId: value, voiceover: null, renderId: undefined }); setRenderDownloadUrl(''); };
+  const setVoiceover = (value: Voiceover | null) => updateDraft({ voiceover: value, renderId: undefined });
   const [playing, setPlaying] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [generatingVideo, setGeneratingVideo] = useState(false);
@@ -87,31 +60,65 @@ export default function App() {
   const totalSeconds = useMemo(() => scenes.reduce((sum, scene) => sum + scene.seconds, 0), [scenes]);
   const videoDurationSeconds = Math.max(totalSeconds, voiceover?.durationSeconds ?? 0);
 
+  const loadAccountProjects = async (user: Account) => {
+    const response = await fetch('/api/v1/projects');
+    const payload = await response.json() as { error?: string; projects?: LessonDraft[] };
+    if (!response.ok || !payload.projects) throw new Error(payload.error || 'Could not load your lessons.');
+    const loaded = payload.projects.length ? payload.projects : [blankDraft()];
+    setAccount(user); setDrafts(loaded); setActiveDraftId(loaded[0].id); setProjectsReady(true); setAuthState('signed_in');
+  };
+
+  const persistProjects = async (projects = drafts) => {
+    const response = await fetch('/api/v1/projects', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projects }) });
+    if (!response.ok) {
+      const payload = await response.json() as { error?: string };
+      throw new Error(payload.error || 'Could not save your lessons.');
+    }
+  };
+
   useEffect(() => {
-    try {
-      localStorage.setItem(draftsKey, JSON.stringify(drafts));
-      localStorage.setItem(activeDraftKey, activeDraft.id);
-    } catch { /* Keep editing when browser storage is unavailable. */ }
-  }, [drafts, activeDraft.id]);
+    void fetch('/api/v1/auth/session').then(async response => {
+      if (!response.ok) throw new Error('signed out');
+      const payload = await response.json() as { user: Account };
+      await loadAccountProjects(payload.user);
+    }).catch(() => { setProjectsReady(false); setAuthState('signed_out'); });
+  }, []);
+
+  useEffect(() => {
+    if (authState !== 'signed_in' || !projectsReady || drafts.length === 0) return;
+    const timer = window.setTimeout(() => {
+      void persistProjects(drafts)
+        .then(() => undefined)
+        .catch(() => setNotice('Could not save your lessons. Check your connection and try again.'));
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [drafts, authState, projectsReady]);
 
   useEffect(() => { if (playing) playerRef.current?.play(); else playerRef.current?.pause(); }, [playing]);
+  useEffect(() => { setRenderDownloadUrl(activeDraft.renderId ? `/api/render-video/${activeDraft.renderId}/download` : ''); }, [activeDraft.id, activeDraft.renderId]);
   useEffect(() => {
     void fetch('/api/voices').then(response => response.json()).then((payload: { voices?: Array<{ voiceId: string; name: string }> }) => setVoices(payload.voices ?? [])).catch(() => setVoices([]));
   }, []);
 
+  const signOut = async () => {
+    await fetch('/api/v1/auth/logout', { method: 'POST' }).catch(() => undefined);
+    setAccount(null); setDrafts([]); setProjectsReady(false); setAuthState('signed_out'); setActiveDraftId('');
+  };
+
   const updateScene = (index: number, key: 'narration' | 'caption', value: string) => {
     setScenes(current => current.map((scene, i) => i === index ? { ...scene, [key]: value, visualSteps: undefined, ...(key === 'narration' ? { needsFactCheck: true } : {}) } : scene));
     if (key === 'narration') setVoiceover(null);
+    updateDraft({ renderId: undefined });
     setRenderDownloadUrl('');
   };
 
   const restoreStarter = () => {
     setScenes(lesson.scenes); setTopic(lesson.topic); setAudience('Kids'); setTargetDuration(30);
-    setSelectedScene(0); setVoiceover(null); setRenderDownloadUrl(''); setNotice('Starter storyboard restored.');
+    updateDraft({ renderId: undefined }); setSelectedScene(0); setVoiceover(null); setRenderDownloadUrl(''); setNotice('Starter storyboard restored.');
   };
 
   const createDraft = () => {
-    const draft: LessonDraft = { id: crypto.randomUUID(), topic: '', audience: 'Kids', targetDuration: 30, tone: 'friendly', voiceId: voices[0]?.voiceId ?? '', scenes: [], voiceover: null, updatedAt: Date.now() };
+    const draft: LessonDraft = { ...blankDraft(), voiceId: voices[0]?.voiceId ?? '' };
     setDrafts(current => [...current, draft]);
     setActiveDraftId(draft.id); setSelectedScene(0); setRenderDownloadUrl(''); setNotice(''); setPlaying(false); playerRef.current?.pause();
   };
@@ -125,7 +132,7 @@ export default function App() {
       scaled[scaled.length - 1] += duration - scaled.reduce((sum, seconds) => sum + seconds, 0);
       return current.map((scene, index) => ({ ...scene, seconds: scaled[index] }));
     });
-    setVoiceover(null); setRenderDownloadUrl('');
+    setVoiceover(null); updateDraft({ renderId: undefined }); setRenderDownloadUrl('');
   };
 
   const addScene = () => {
@@ -150,7 +157,8 @@ export default function App() {
   const generateVoiceover = async () => {
     setGeneratingVoiceover(true); setNotice(''); setPlaying(false); playerRef.current?.pause();
     try {
-      const result = await fetch('/api/generate-narration', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scenes, tone, voiceId }) });
+      await persistProjects();
+      const result = await fetch('/api/generate-narration', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: activeDraft.id, scenes, tone, voiceId }) });
       const payload = await result.json() as Voiceover & { error?: string };
       if (!result.ok || !payload.audioUrl || !payload.sceneTimings) throw new Error(payload.error || 'Could not generate the voiceover.');
       setVoiceover(payload); setRenderDownloadUrl('');
@@ -165,7 +173,7 @@ export default function App() {
     try {
       const audioId = voiceoverToRender.audioUrl.match(/\/api\/audio\/([0-9a-f-]{36})/i)?.[1];
       if (!audioId) throw new Error('The narration file could not be found. Generate the voiceover again.');
-      const start = await fetch('/api/render-video', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scenes: scenesToRender, title: titleToRender, audioId, sceneTimings: voiceoverToRender.sceneTimings, audioDurationSeconds: voiceoverToRender.durationSeconds }) });
+      const start = await fetch('/api/render-video', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: activeDraft.id, scenes: scenesToRender, title: titleToRender, audioId, sceneTimings: voiceoverToRender.sceneTimings, audioDurationSeconds: voiceoverToRender.durationSeconds }) });
       const started = await start.json() as { error?: string; renderId?: string };
       if (!start.ok || !started.renderId) throw new Error(started.error || 'The MP4 export could not be started.');
       while (true) {
@@ -175,7 +183,7 @@ export default function App() {
         if (!statusResponse.ok) throw new Error(status.error || 'Could not read the export status.');
         setRenderProgress(status.progress ?? 0);
         if (status.status === 'failed') throw new Error(status.error || 'The MP4 export failed.');
-        if (status.status === 'complete' && status.downloadUrl) { setRenderDownloadUrl(status.downloadUrl); setNotice('Your vertical MP4 is ready to download.'); return status.downloadUrl; }
+        if (status.status === 'complete' && status.downloadUrl) { updateDraft({ renderId: started.renderId }); setRenderDownloadUrl(status.downloadUrl); setNotice('Your vertical MP4 is ready to download.'); return status.downloadUrl; }
       }
     } catch (error) { setNotice(error instanceof Error ? error.message : 'The MP4 export failed.'); throw error; }
     finally { setRenderingVideo(false); }
@@ -185,6 +193,7 @@ export default function App() {
     if (topic.trim().length < 3) { setNotice('Add a topic or question first.'); return; }
     setGeneratingVideo(true); setRenderDownloadUrl(''); setNotice(''); setPlaying(false); playerRef.current?.pause();
     try {
+      await persistProjects();
       let generatedTitle = topic.trim();
       let generatedScenes = scenes;
       let reviewNote = '';
@@ -200,7 +209,7 @@ export default function App() {
       }
 
       setPipelineStep('Creating narration…');
-      const narrationResponse = await fetch('/api/generate-narration', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ scenes: generatedScenes, tone, voiceId }) });
+      const narrationResponse = await fetch('/api/generate-narration', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: activeDraft.id, scenes: generatedScenes, tone, voiceId }) });
       const narrationPayload = await narrationResponse.json() as Voiceover & { error?: string };
       if (!narrationResponse.ok || !narrationPayload.audioUrl || !narrationPayload.sceneTimings) throw new Error(narrationPayload.error || 'Could not generate the narration. Your lesson draft is saved.');
       setVoiceover(narrationPayload);
@@ -213,10 +222,13 @@ export default function App() {
     } finally { setGeneratingVideo(false); setPipelineStep(''); }
   };
 
+  if (authState === 'loading') return <div className="auth-shell"><div className="auth-card"><span className="brand-mark">✳</span><h1>Opening your studio…</h1></div></div>;
+  if (authState === 'signed_out') return <AuthScreen onAuthenticated={loadAccountProjects} />;
+
   return <div className="studio-shell">
-    <StudioSidebar drafts={drafts} activeDraftId={activeDraft.id} busy={generatingVideo} onSelectDraft={id => { setActiveDraftId(id); setSelectedScene(0); setRenderDownloadUrl(''); setNotice(''); setPlaying(false); playerRef.current?.pause(); }} onCreateDraft={createDraft} onReset={restoreStarter} />
+    <StudioSidebar drafts={drafts} activeDraftId={activeDraft.id} user={account!} onSignOut={() => { void signOut(); }} busy={generatingVideo} onSelectDraft={id => { setActiveDraftId(id); setSelectedScene(0); setRenderDownloadUrl(drafts.find(draft => draft.id === id)?.renderId ? `/api/render-video/${drafts.find(draft => draft.id === id)?.renderId}/download` : ''); setNotice(''); setPlaying(false); playerRef.current?.pause(); }} onCreateDraft={createDraft} onReset={restoreStarter} />
     <main className="main-area">
-      <header className="topbar"><div className="crumb">My lessons <span>/</span> <strong>{topic}</strong></div><div className="top-actions"><span className="saved"><i /> Saved on this device</span><button className="avatar small">Y</button></div></header>
+      <header className="topbar"><div className="crumb">My lessons <span>/</span> <strong>{topic}</strong></div><div className="top-actions"><span className="saved"><i /> Saved to your account</span><button className="avatar small">{account?.displayName.slice(0, 1).toUpperCase()}</button></div></header>
       <div className="studio-content">
         <section className="heading-row"><div><div className="eyebrow">YOUR NEXT LITTLE LESSON</div><h1>Let’s make a video <span>✳</span></h1><p>A tiny question can open up a whole world.</p></div><button className="text-button" onClick={restoreStarter}>↺ <span>Reset draft</span></button></section>
         <LessonBrief topic={topic} audience={audience} duration={targetDuration} generatingVideo={generatingVideo} drafting={generating} disabled={generatingVideo || generating} pipelineStep={pipelineStep} onGenerateVideo={generateVideo} onTopicChange={changeTopic} onAudienceChange={setAudience} onDurationChange={changeDuration} />

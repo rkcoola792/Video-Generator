@@ -15,7 +15,8 @@ The proposed database is PostgreSQL. The initial DDL is [schema.sql](schema.sql)
 
 | Table | Purpose |
 |---|---|
-| `app_user` | Local user identity; seed one local user before login exists. |
+| `app_user` | Email, display name, and a scrypt password hash for each account. |
+| `app_session` | Hashed bearer token, owning user, creation time, and expiry for browser sessions. |
 | `project` | Topic, audience, duration, language, and current state. |
 | `project_version` | Version number, script/storyboard JSON, approval metadata. |
 | `scene` | Ordered narration, visual/text fields, timing, review flags. |
@@ -37,7 +38,7 @@ The proposed database is PostgreSQL. The initial DDL is [schema.sql](schema.sql)
 - Final-render approval references the exact version and render asset it approves.
 - A scheduled post must point at an approved final render.
 - A retry reuses the same scheduled-post row and creates a new publish job attempt.
-- Tokens and OAuth codes are never stored as plaintext in logs. Encrypt tokens at rest or store an encrypted secret reference.
+- Passwords are never stored in plaintext. Session tokens are random, held in HTTP-only cookies, and stored as SHA-256 hashes in this table. OAuth codes are never stored in plaintext in logs. Encrypt social tokens at rest or store an encrypted secret reference.
 - Asset bytes live in file/object storage, not PostgreSQL. The `asset` table stores metadata and a storage key.
 - Deleting a project must enqueue asset cleanup; do not delete records while jobs are still running.
 
@@ -49,12 +50,13 @@ Edits create a new `project_version`; they do not mutate an approved version in 
 
 The schema indexes projects by owner/update time, scenes by version/position, jobs by state/next-attempt time, scheduled posts by account/time, assets by project/version/type, and OAuth states by hash/expiry.
 
-Store timestamps as UTC `timestamptz`. Convert to a user's timezone only in the calendar UI and schedule input/output.
+Store timestamps as UTC `timestamptz`. Convert to a user's timezone only in the calendar UI and schedule input/output. Every project and its generated media must be checked against the authenticated `owner_id` before it is returned or downloaded.
 
 ## 6. Migrations and seeds
 
 - Store each migration as an ordered SQL file.
-- Seed one local user and one demo project only in development.
+- Create accounts through the registration endpoint; never seed a shared user for normal use.
+- Apply the ordered SQL files under `db/migrations` with `npm run db:migrate`.
 - Keep provider IDs, account tokens, and generated assets out of seed files.
 - Back up database metadata and file storage together before hosted launch.
 

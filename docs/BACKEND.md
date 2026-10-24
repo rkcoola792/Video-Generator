@@ -120,6 +120,7 @@ Create `.env.example` with variable names only. Keep `.env` ignored by Git.
 
 ```dotenv
 DATABASE_URL=
+DATABASE_SSL=false
 GEMINI_API_KEY=
 GEMINI_TEXT_MODEL=
 OPENAI_IMAGE_MODEL=
@@ -133,6 +134,8 @@ INSTAGRAM_APP_SECRET=
 INSTAGRAM_REDIRECT_URI=
 TOKEN_ENCRYPTION_KEY=
 ```
+
+The first auth implementation uses PostgreSQL-backed email/password accounts and opaque, randomly generated session cookies. Passwords are stored as scrypt hashes; only SHA-256 hashes of session tokens are stored in PostgreSQL. Run `npm run db:migrate` after setting `DATABASE_URL`. In local development, set up PostgreSQL using the steps in [PROTOTYPE.md](PROTOTYPE.md).
 
 ## 10. Operational visibility
 

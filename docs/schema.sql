@@ -7,8 +7,20 @@ CREATE TABLE app_user (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email TEXT UNIQUE,
     display_name TEXT NOT NULL DEFAULT 'Local user',
+    password_hash TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE UNIQUE INDEX app_user_email_lower_idx ON app_user (lower(email)) WHERE email IS NOT NULL;
+
+CREATE TABLE app_session (
+    token_hash TEXT PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX app_session_expiry_idx ON app_session(expires_at);
 
 CREATE TABLE project (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

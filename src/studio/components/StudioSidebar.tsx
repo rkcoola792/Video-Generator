@@ -1,4 +1,6 @@
 type Props = {
+  user: { email: string; displayName: string };
+  onSignOut: () => void;
   drafts: Array<{ id: string; topic: string; updatedAt: number }>;
   activeDraftId: string;
   onSelectDraft: (id: string) => void;
@@ -7,7 +9,7 @@ type Props = {
   busy?: boolean;
 };
 
-export function StudioSidebar({ drafts, activeDraftId, onSelectDraft, onCreateDraft, onReset, busy = false }: Props) {
+export function StudioSidebar({ drafts, activeDraftId, onSelectDraft, onCreateDraft, onReset, user, onSignOut, busy = false }: Props) {
   return <aside className="sidebar">
     <div className="brand"><div className="brand-mark">✳</div><div><strong>little lessons</strong><small>VIDEO STUDIO</small></div></div>
     <div className="side-label">WORKSPACE</div>
@@ -17,6 +19,6 @@ export function StudioSidebar({ drafts, activeDraftId, onSelectDraft, onCreateDr
     <button className="nav-item" disabled={busy} onClick={onReset}><span>↺</span> Restore starter</button>
     <div className="side-spacer" />
     <div className="sidebar-note"><div className="note-icon">✦</div><strong>Little ideas,<br />big discoveries.</strong><p>Make something wonderful today.</p></div>
-    <div className="profile"><div className="avatar">Y</div><div><strong>Your studio</strong><small>Personal workspace</small></div><span>···</span></div>
+    <div className="profile"><div className="avatar">{user.displayName.slice(0, 1).toUpperCase()}</div><div className="profile-copy"><strong>{user.displayName}</strong><small>{user.email}</small></div><button className="sign-out" onClick={onSignOut} title="Sign out">↗</button></div>
   </aside>;
 }

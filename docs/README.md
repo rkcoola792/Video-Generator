@@ -13,6 +13,7 @@ These documents specify the product before implementation.
 | [schema.sql](schema.sql) | Initial PostgreSQL DDL proposal. |
 | [INTEGRATIONS.md](INTEGRATIONS.md) | Gemini, ElevenLabs, Remotion, Instagram, and music integration boundaries. |
 | [PROTOTYPE.md](PROTOTYPE.md) | How to run the first local video studio prototype and what it includes. |
+| [ROADMAP.md](ROADMAP.md) | Current feature coverage and prioritized next implementation steps. |
 
 ## Decisions recorded
 

@@ -11,6 +11,10 @@ This is a provider map, not a guarantee of current endpoint availability. Keep m
 - Require schema fields for title, hook, recap, scenes, narration, on-screen text, visual prompts, claims, and source references.
 - Validate returned data in the application even when Structured Outputs is enabled; handle refusals and incomplete output separately.
 
+### OpenAI text fallback
+
+The lesson endpoint tries Gemini first, retries temporary Gemini outages, then uses OpenAI Responses with a strict JSON schema if `OPENAI_API_KEY` is configured. OpenAI can also generate lessons by itself when `GEMINI_API_KEY` is absent. Set `OPENAI_TEXT_MODEL` to override the default `gpt-6-astra`. Both providers receive the same evidence brief and their output is validated against the same five-scene timing and field requirements. Keep the key in the server-side `.env` only.
+
 ### Source discovery
 
 The local prototype uses Brave Web Search (`BRAVE_SEARCH_API_KEY`) to retrieve result titles, URLs, and snippets before the schema-constrained Gemini storyboard call. The result list is passed into Gemini as evidence; scene references are attached as clickable links and scenes can be flagged for educator review. Search snippets may not prove a claim, so keep the human review step. This provider can be replaced behind a `SourceFinder` adapter.
