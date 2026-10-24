@@ -1,0 +1,720 @@
+openapi: 3.1.0
+info:
+  title: Educational Video Maker API
+  version: 1.0.0-draft
+  description: Local-first app API for lesson planning, generation jobs, rendering, and Instagram scheduling.
+servers:
+  - url: http://localhost:3000/api/v1
+    description: Local development
+security:
+  - bearerAuth: []
+tags:
+  - name: Health
+  - name: Projects
+  - name: Generation
+  - name: Jobs
+  - name: Social
+  - name: Publishing
+paths:
+  /health:
+    get:
+      tags: [Health]
+      security: []
+      summary: Check app health
+      responses:
+        '200':
+          description: App is available
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+
+  /projects:
+    get:
+      tags: [Projects]
+      summary: List projects
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: status
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Project page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ProjectSummary' } }
+                  nextCursor: { type: [string, 'null'] }
+    post:
+      tags: [Projects]
+      summary: Create a lesson draft
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateProjectRequest' }
+      responses:
+        '201':
+          description: Draft created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectDetail' }
+        '400': { $ref: '#/components/responses/Problem' }
+
+  /projects/{projectId}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Projects]
+      summary: Get project, current storyboard, and assets
+      responses:
+        '200':
+          description: Project detail
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectDetail' }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      tags: [Projects]
+      summary: Update project metadata
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateProjectRequest' }
+      responses:
+        '200':
+          description: Updated project
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectDetail' }
+        '409': { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Projects]
+      summary: Archive a project
+      responses:
+        '204': { description: Archived }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /projects/{projectId}/script:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [Generation]
+      summary: Generate one script and storyboard draft with source references
+      description: Creates the initial draft for a project. This endpoint does not create multiple alternatives.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [topic, audience, targetDurationSeconds]
+              properties:
+                topic: { type: string, minLength: 3, maxLength: 500 }
+                audience: { $ref: '#/components/schemas/Audience' }
+                targetDurationSeconds: { type: integer, enum: [30, 45, 60] }
+                language: { type: string, const: EN, default: EN }
+      responses:
+        '202':
+          description: Script generation queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobAccepted' }
+        '409': { $ref: '#/components/responses/Problem' }
+
+  /projects/{projectId}/storyboard:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    patch:
+      tags: [Projects]
+      summary: Save educator edits as a new project version
+      parameters:
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateStoryboardRequest' }
+      responses:
+        '200':
+          description: Updated storyboard
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectDetail' }
+        '409': { $ref: '#/components/responses/Problem' }
+
+  /projects/{projectId}/scenes/{sceneId}/illustration:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: sceneId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    post:
+      tags: [Generation]
+      summary: Generate or regenerate one scene illustration
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                visualPrompt: { type: string, maxLength: 2000 }
+                style: { type: string, const: playful_doodle, default: playful_doodle }
+                referenceAssetId: { type: [string, 'null'], format: uuid }
+      responses:
+        '202':
+          description: Illustration job queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobAccepted' }
+
+  /projects/{projectId}/narration:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [Generation]
+      summary: Generate narration from the approved storyboard
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [voiceId, tone]
+              properties:
+                voiceId: { type: string }
+                tone: { type: string, enum: [friendly, energetic, calm] }
+                modelId: { type: string, description: Optional provider model override. }
+      responses:
+        '202':
+          description: Narration job queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobAccepted' }
+
+  /projects/{projectId}/publishing-assets:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [Generation]
+      summary: Generate a titled cover and suggested Instagram caption and hashtags
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Publishing asset job queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobAccepted' }
+
+  /projects/{projectId}/render:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [Generation]
+      summary: Render approved assets to a vertical MP4
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                backgroundMusicAssetId: { type: [string, 'null'], format: uuid }
+      responses:
+        '202':
+          description: Render job queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobAccepted' }
+
+  /projects/{projectId}/approvals:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    post:
+      tags: [Projects]
+      summary: Record user approval for storyboard or final render
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stage, projectVersionId]
+              properties:
+                stage: { type: string, enum: [storyboard, final_render] }
+                projectVersionId: { type: string, format: uuid }
+                renderAssetId: { type: [string, 'null'], format: uuid }
+      responses:
+        '201':
+          description: Approval recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Approval' }
+        '409': { $ref: '#/components/responses/Problem' }
+
+  /projects/{projectId}/download:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+    get:
+      tags: [Projects]
+      summary: Get a short-lived MP4 download URL for the latest render
+      responses:
+        '200':
+          description: Download URL
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [url, expiresAt]
+                properties:
+                  url: { type: string, format: uri }
+                  expiresAt: { type: string, format: date-time }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /jobs/{jobId}:
+    get:
+      tags: [Jobs]
+      summary: Get job state and safe progress details
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Job status
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '404': { $ref: '#/components/responses/Problem' }
+
+  /social/instagram/connect:
+    post:
+      tags: [Social]
+      summary: Begin Instagram OAuth connection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [redirectAfterConnect]
+              properties:
+                redirectAfterConnect: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: Authorization URL to open in browser
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authorizationUrl]
+                properties:
+                  authorizationUrl: { type: string, format: uri }
+
+  /social/instagram/callback:
+    get:
+      tags: [Social]
+      security: []
+      summary: OAuth callback (called by Meta, then redirects to app)
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+        - name: state
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '302': { description: Redirect to app after validating state and saving token securely. }
+        '400': { $ref: '#/components/responses/Problem' }
+
+  /social/accounts:
+    get:
+      tags: [Social]
+      summary: List connected social accounts
+      responses:
+        '200':
+          description: Connected accounts
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/SocialAccount' } }
+
+  /social/accounts/{accountId}:
+    delete:
+      tags: [Social]
+      summary: Disconnect account and revoke/delete stored token
+      parameters:
+        - name: accountId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204': { description: Account disconnected. }
+
+  /calendar:
+    get:
+      tags: [Publishing]
+      summary: List scheduled and recent posts for a time range
+      parameters:
+        - name: from
+          in: query
+          required: true
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: true
+          schema: { type: string, format: date-time }
+        - name: timezone
+          in: query
+          required: true
+          schema: { type: string, example: Asia/Calcutta }
+      responses:
+        '200':
+          description: Calendar entries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ScheduledPost' } }
+
+  /posts:
+    get:
+      tags: [Publishing]
+      summary: List posts
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: status
+          in: query
+          schema: { type: string, enum: [scheduled, publishing, published, failed, cancelled] }
+      responses:
+        '200':
+          description: Post page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ScheduledPost' } }
+                  nextCursor: { type: [string, 'null'] }
+    post:
+      tags: [Publishing]
+      summary: Schedule an approved video for Instagram
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePostRequest' }
+      responses:
+        '201':
+          description: Post scheduled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScheduledPost' }
+        '409': { $ref: '#/components/responses/Problem' }
+
+  /posts/{postId}:
+    parameters:
+      - name: postId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    get:
+      tags: [Publishing]
+      summary: Get publishing status
+      responses:
+        '200':
+          description: Scheduled post
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScheduledPost' }
+    patch:
+      tags: [Publishing]
+      summary: Edit caption/hashtags or reschedule a post that has not started publishing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdatePostRequest' }
+      responses:
+        '200':
+          description: Post updated
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScheduledPost' }
+        '409': { $ref: '#/components/responses/Problem' }
+    delete:
+      tags: [Publishing]
+      summary: Cancel a scheduled post
+      responses:
+        '204': { description: Scheduled post cancelled. }
+        '409': { $ref: '#/components/responses/Problem' }
+
+  /posts/{postId}/retry:
+    post:
+      tags: [Publishing]
+      summary: Retry a failed Instagram publish
+      parameters:
+        - name: postId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202':
+          description: Retry queued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobAccepted' }
+        '409': { $ref: '#/components/responses/Problem' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: session-token
+  parameters:
+    ProjectId:
+      name: projectId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string, format: uuid }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: Current project version ETag.
+      schema: { type: string, example: '"3"' }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+  responses:
+    Problem:
+      description: Request failed
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+  schemas:
+    Audience:
+      type: string
+      enum: [KIDS, TEENS, ADULT_BEGINNERS]
+    ProjectSummary:
+      type: object
+      required: [id, title, topic, audience, targetDurationSeconds, status, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        topic: { type: string }
+        audience: { $ref: '#/components/schemas/Audience' }
+        targetDurationSeconds: { type: integer, enum: [30, 45, 60] }
+        status: { type: string }
+        updatedAt: { type: string, format: date-time }
+    CreateProjectRequest:
+      type: object
+      required: [topic, audience, targetDurationSeconds]
+      properties:
+        topic: { type: string, minLength: 3, maxLength: 500 }
+        title: { type: [string, 'null'], maxLength: 160 }
+        audience: { $ref: '#/components/schemas/Audience' }
+        targetDurationSeconds: { type: integer, enum: [30, 45, 60] }
+        language: { type: string, const: EN, default: EN }
+    UpdateProjectRequest:
+      type: object
+      minProperties: 1
+      properties:
+        title: { type: string, maxLength: 160 }
+        topic: { type: string, minLength: 3, maxLength: 500 }
+        audience: { $ref: '#/components/schemas/Audience' }
+        targetDurationSeconds: { type: integer, enum: [30, 45, 60] }
+    ProjectDetail:
+      allOf:
+        - $ref: '#/components/schemas/ProjectSummary'
+        - type: object
+          required: [currentVersion, scenes, sources, assets]
+          properties:
+            currentVersion: { type: integer }
+            script: { $ref: '#/components/schemas/Script' }
+            scenes: { type: array, items: { $ref: '#/components/schemas/Scene' } }
+            sources: { type: array, items: { $ref: '#/components/schemas/Source' } }
+            assets: { type: array, items: { $ref: '#/components/schemas/Asset' } }
+    Script:
+      type: object
+      properties:
+        title: { type: string }
+        hook: { type: string }
+        recap: { type: string }
+        language: { type: string, const: EN }
+    Scene:
+      type: object
+      required: [id, position, kind, narrationText, onScreenText, visualPrompt]
+      properties:
+        id: { type: string, format: uuid }
+        position: { type: integer, minimum: 0 }
+        kind: { type: string, enum: [HOOK, EXPLANATION, EXAMPLE, RECAP] }
+        narrationText: { type: string }
+        onScreenText: { type: string }
+        visualPrompt: { type: string }
+        durationMs: { type: [integer, 'null'], minimum: 1 }
+        reviewFlags: { type: array, items: { type: string } }
+        illustrationAssetId: { type: [string, 'null'], format: uuid }
+    Source:
+      type: object
+      required: [id, title, url, retrievedAt]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        url: { type: string, format: uri }
+        publisher: { type: [string, 'null'] }
+        excerpt: { type: [string, 'null'] }
+        retrievedAt: { type: string, format: date-time }
+    Asset:
+      type: object
+      required: [id, type, mediaType, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [SCENE_ILLUSTRATION, NARRATION_AUDIO, CAPTIONS, BACKGROUND_MUSIC, REEL_COVER, FINAL_VIDEO] }
+        mediaType: { type: string }
+        downloadUrl: { type: [string, 'null'], format: uri }
+        createdAt: { type: string, format: date-time }
+    UpdateStoryboardRequest:
+      type: object
+      required: [scenes]
+      properties:
+        title: { type: string, maxLength: 160 }
+        hook: { type: string }
+        recap: { type: string }
+        scenes: { type: array, minItems: 2, items: { $ref: '#/components/schemas/SceneEdit' } }
+    SceneEdit:
+      type: object
+      required: [id, position, narrationText, onScreenText, visualPrompt]
+      properties:
+        id: { type: string, format: uuid }
+        position: { type: integer, minimum: 0 }
+        narrationText: { type: string, maxLength: 2000 }
+        onScreenText: { type: string, maxLength: 300 }
+        visualPrompt: { type: string, maxLength: 2000 }
+    JobAccepted:
+      type: object
+      required: [jobId, status, statusUrl]
+      properties:
+        jobId: { type: string, format: uuid }
+        status: { type: string, const: queued }
+        statusUrl: { type: string, format: uri-reference }
+    Job:
+      type: object
+      required: [id, type, status, progress, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string }
+        status: { type: string, enum: [queued, running, retry_wait, succeeded, failed, cancelled] }
+        progress: { type: object, additionalProperties: true }
+        result: { type: [object, 'null'], additionalProperties: true }
+        error: { type: [object, 'null'], properties: { code: { type: string }, message: { type: string } } }
+        createdAt: { type: string, format: date-time }
+        completedAt: { type: [string, 'null'], format: date-time }
+    Approval:
+      type: object
+      required: [id, stage, projectVersionId, approvedAt]
+      properties:
+        id: { type: string, format: uuid }
+        stage: { type: string, enum: [storyboard, final_render] }
+        projectVersionId: { type: string, format: uuid }
+        renderAssetId: { type: [string, 'null'], format: uuid }
+        approvedAt: { type: string, format: date-time }
+    SocialAccount:
+      type: object
+      required: [id, provider, username, status]
+      properties:
+        id: { type: string, format: uuid }
+        provider: { type: string, const: INSTAGRAM }
+        username: { type: [string, 'null'] }
+        status: { type: string, enum: [connected, reauth_required, disconnected] }
+    CreatePostRequest:
+      type: object
+      required: [projectVersionId, renderAssetId, socialAccountId, scheduledAt, timezone, caption]
+      properties:
+        projectVersionId: { type: string, format: uuid }
+        renderAssetId: { type: string, format: uuid }
+        socialAccountId: { type: string, format: uuid }
+        coverAssetId: { type: [string, 'null'], format: uuid }
+        scheduledAt: { type: string, format: date-time }
+        timezone: { type: string, example: Asia/Calcutta }
+        caption: { type: string, maxLength: 2200 }
+        hashtags: { type: array, maxItems: 30, items: { type: string } }
+    UpdatePostRequest:
+      type: object
+      minProperties: 1
+      properties:
+        scheduledAt: { type: string, format: date-time }
+        timezone: { type: string }
+        caption: { type: string, maxLength: 2200 }
+        hashtags: { type: array, maxItems: 30, items: { type: string } }
+    ScheduledPost:
+      type: object
+      required: [id, projectId, status, scheduledAt, timezone, caption, hashtags]
+      properties:
+        id: { type: string, format: uuid }
+        projectId: { type: string, format: uuid }
+        status: { type: string, enum: [scheduled, publishing, published, failed, cancelled] }
+        scheduledAt: { type: string, format: date-time }
+        timezone: { type: string }
+        caption: { type: string }
+        hashtags: { type: array, items: { type: string } }
+        platformPostId: { type: [string, 'null'] }
+        lastError: { type: [string, 'null'] }
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type: { type: string, format: uri-reference }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string, format: uri-reference }
+        code: { type: string }
+        requestId: { type: string }

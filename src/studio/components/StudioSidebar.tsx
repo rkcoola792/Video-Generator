@@ -1,0 +1,22 @@
+type Props = {
+  drafts: Array<{ id: string; topic: string; updatedAt: number }>;
+  activeDraftId: string;
+  onSelectDraft: (id: string) => void;
+  onCreateDraft: () => void;
+  onReset: () => void;
+  busy?: boolean;
+};
+
+export function StudioSidebar({ drafts, activeDraftId, onSelectDraft, onCreateDraft, onReset, busy = false }: Props) {
+  return <aside className="sidebar">
+    <div className="brand"><div className="brand-mark">✳</div><div><strong>little lessons</strong><small>VIDEO STUDIO</small></div></div>
+    <div className="side-label">WORKSPACE</div>
+    <button className="nav-item active" disabled={busy} onClick={onCreateDraft}><span>＋</span> New lesson</button>
+    <div className="side-label draft-label">RECENT DRAFTS <b>{drafts.length}</b></div>
+    <div className="draft-list">{[...drafts].sort((a, b) => b.updatedAt - a.updatedAt).map(draft => <button key={draft.id} className={`nav-item draft-item ${draft.id === activeDraftId ? 'active' : ''}`} title={draft.topic || 'Untitled lesson'} disabled={busy} onClick={() => onSelectDraft(draft.id)}><span>◷</span><span className="draft-title">{draft.topic || 'Untitled lesson'}</span></button>)}</div>
+    <button className="nav-item" disabled={busy} onClick={onReset}><span>↺</span> Restore starter</button>
+    <div className="side-spacer" />
+    <div className="sidebar-note"><div className="note-icon">✦</div><strong>Little ideas,<br />big discoveries.</strong><p>Make something wonderful today.</p></div>
+    <div className="profile"><div className="avatar">Y</div><div><strong>Your studio</strong><small>Personal workspace</small></div><span>···</span></div>
+  </aside>;
+}
