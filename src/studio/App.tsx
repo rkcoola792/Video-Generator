@@ -112,6 +112,11 @@ export default function App() {
     setRenderDownloadUrl('');
   };
 
+  const setSceneAnimationStyle = (index: number, animationStyle: NonNullable<Scene['animationStyle']>) => {
+    setScenes(current => current.map((scene, sceneIndex) => sceneIndex === index ? { ...scene, animationStyle } : scene));
+    updateDraft({ renderId: undefined }); setRenderDownloadUrl('');
+  };
+
   const restoreStarter = () => {
     setScenes(lesson.scenes); setTopic(lesson.topic); setAudience('Kids'); setTargetDuration(30);
     updateDraft({ renderId: undefined }); setSelectedScene(0); setVoiceover(null); setRenderDownloadUrl(''); setNotice('Starter storyboard restored.');
@@ -167,7 +172,7 @@ export default function App() {
     finally { setGeneratingVoiceover(false); }
   };
 
-  const exportVideo = async (scenesToRender = scenes, titleToRender = topic, voiceoverToRender = voiceover) => {
+  const exportVideo = async (scenesToRender = scenes, titleToRender = topic, voiceoverToRender = voiceover, downloadWhenReady = false) => {
     if (!voiceoverToRender) throw new Error('Generate the narration first, then export your finished MP4.');
     setRenderingVideo(true); setRenderProgress(0); setRenderDownloadUrl(''); setNotice('Preparing your vertical MP4…');
     try {
@@ -183,7 +188,18 @@ export default function App() {
         if (!statusResponse.ok) throw new Error(status.error || 'Could not read the export status.');
         setRenderProgress(status.progress ?? 0);
         if (status.status === 'failed') throw new Error(status.error || 'The MP4 export failed.');
-        if (status.status === 'complete' && status.downloadUrl) { updateDraft({ renderId: started.renderId }); setRenderDownloadUrl(status.downloadUrl); setNotice('Your vertical MP4 is ready to download.'); return status.downloadUrl; }
+        if (status.status === 'complete' && status.downloadUrl) {
+          updateDraft({ renderId: started.renderId }); setRenderDownloadUrl(status.downloadUrl); setNotice('Your vertical MP4 is ready to download.');
+          if (downloadWhenReady) {
+            const download = document.createElement('a');
+            download.href = status.downloadUrl;
+            download.download = 'little-lessons.mp4';
+            document.body.appendChild(download);
+            download.click();
+            download.remove();
+          }
+          return status.downloadUrl;
+        }
       }
     } catch (error) { setNotice(error instanceof Error ? error.message : 'The MP4 export failed.'); throw error; }
     finally { setRenderingVideo(false); }
@@ -233,8 +249,8 @@ export default function App() {
         <section className="heading-row"><div><div className="eyebrow">YOUR NEXT LITTLE LESSON</div><h1>Let’s make a video <span>✳</span></h1><p>A tiny question can open up a whole world.</p></div><button className="text-button" onClick={restoreStarter}>↺ <span>Reset draft</span></button></section>
         <LessonBrief topic={topic} audience={audience} duration={targetDuration} generatingVideo={generatingVideo} drafting={generating} disabled={generatingVideo || generating} pipelineStep={pipelineStep} onGenerateVideo={generateVideo} onTopicChange={changeTopic} onAudienceChange={setAudience} onDurationChange={changeDuration} />
         <div className="work-grid">
-          <StoryboardEditor scenes={scenes} selected={selectedScene} busy={generatingVideo} onSelect={setSelectedScene} onUpdate={updateScene} onAdd={addScene} onRestore={restoreStarter} />
-          <VideoPreview key={activeDraft.id} playerRef={playerRef} scenes={scenes} title={topic} voiceover={voiceover} tone={tone} voiceId={voiceId} voices={voices} playing={playing} durationSeconds={videoDurationSeconds} generatingVoiceover={generatingVoiceover} renderingVideo={renderingVideo} renderProgress={renderProgress} renderDownloadUrl={renderDownloadUrl} notice={notice} generatingVideo={generatingVideo} pipelineStep={pipelineStep} onToneChange={setTone} onVoiceChange={setVoiceId} onPlayToggle={() => setPlaying(value => !value)} onGenerateVoiceover={generateVoiceover} onExport={() => { void exportVideo().catch(() => undefined); }} />
+          <StoryboardEditor scenes={scenes} selected={selectedScene} busy={generatingVideo} onSelect={setSelectedScene} onUpdate={updateScene} onStyleChange={setSceneAnimationStyle} onAdd={addScene} onRestore={restoreStarter} />
+          <VideoPreview key={activeDraft.id} playerRef={playerRef} scenes={scenes} title={topic} voiceover={voiceover} tone={tone} voiceId={voiceId} voices={voices} playing={playing} durationSeconds={videoDurationSeconds} generatingVoiceover={generatingVoiceover} renderingVideo={renderingVideo} renderProgress={renderProgress} renderDownloadUrl={renderDownloadUrl} notice={notice} generatingVideo={generatingVideo} pipelineStep={pipelineStep} onToneChange={setTone} onVoiceChange={setVoiceId} onPlayToggle={() => setPlaying(value => !value)} onGenerateVoiceover={generateVoiceover} onExport={() => { void exportVideo(scenes, topic, voiceover, true).catch(() => undefined); }} />
         </div>
         <footer className="page-footer"><span>MADE WITH CURIOSITY <span>✳</span></span><button className="draft-only-button" disabled={generating || generatingVideo} onClick={generateLesson}>{generating ? <>◌ Drafting with Gemini…</> : 'Draft script only'}</button></footer>
       </div>

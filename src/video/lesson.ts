@@ -11,6 +11,7 @@ export type Scene = {
   imageUrl?: string;
   visualSteps?: string[];
   diagramType?: 'right-triangle' | 'flow' | 'cycle' | 'comparison' | 'cause-effect';
+  animationStyle?: 'auto' | 'doodle' | 'whiteboard';
 };
 
 export type SourceReference = { title: string; url: string };

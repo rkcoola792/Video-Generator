@@ -10,9 +10,12 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "render": "remotion render src/remotion/index.ts LessonVideo out/sky-blue-prototype.mp4",
-    "db:migrate": "tsx scripts/migrate.ts"
+    "db:migrate": "tsx scripts/migrate.ts",
+    "storage:migrate-to-r2": "tsx scripts/migrate-assets-to-r2.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1156.0",
+    "@aws-sdk/s3-request-presigner": "^3.1156.0",
     "@google/genai": "^1.0.0",
     "@remotion/bundler": "^4.0.0",
     "@remotion/player": "^4.0.0",

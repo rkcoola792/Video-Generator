@@ -2,18 +2,27 @@ import 'dotenv/config';
 import express from 'express';
 import { GoogleGenAI } from '@google/genai';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { bundle } from '@remotion/bundler';
 import { renderMedia, selectComposition } from '@remotion/renderer';
 import type { Scene } from '../src/video/lesson';
 import { clearSessionCookie, hashToken, limitAuthAttempts, loginUser, registerUser, requireAuth, sessionUser } from './auth';
 import { requireDatabase } from './database';
+import { getPrivateDownload, hasStoredObject, mediaStorageMode, readStoredObject, removeLocalObject, storeBuffer, storeFile } from './media-storage';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 const renderJobs = new Map<string, { status: 'rendering' | 'complete' | 'failed'; progress: number; error?: string; userId: string; projectId: string }>();
 let serveUrlPromise: ReturnType<typeof bundle> | undefined;
+
+const windowsChrome = process.platform === 'win32'
+  ? [process.env.REMOTION_BROWSER_EXECUTABLE, 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe', 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'].find(path => path && existsSync(path))
+  : undefined;
+const remotionBrowserOptions = windowsChrome
+  ? { browserExecutable: windowsChrome, chromeMode: 'chrome-for-testing' as const }
+  : {};
 
 const palette = ['#ffc857', '#ff9b71', '#74c6d4', '#8b9fe8', '#92b88c'];
 const visuals = ['hook', 'explain', 'scatter', 'explain', 'recap'] as const;
@@ -91,7 +100,7 @@ function parseLessonDraft(text: string, provider: string, targetDurationSeconds:
   return draft;
 }
 
-app.get('/api/status', (_request, response) => response.json({ geminiConfigured: Boolean(process.env.GEMINI_API_KEY) }));
+app.get('/api/status', (_request, response) => response.json({ geminiConfigured: Boolean(process.env.GEMINI_API_KEY), mediaStorage: mediaStorageMode }));
 
 app.post('/api/v1/auth/register', limitAuthAttempts, async (request, response) => {
   try {
@@ -232,12 +241,12 @@ app.get('/api/render-video/:renderId', async (request, response) => {
        WHERE a.storage_key = $1 AND p.owner_id = $2`, [`renders/${id}.mp4`, request.user!.id],
     );
     if (!ownedAsset.rowCount) return response.status(404).json({ error: 'Render not found.' });
+    if (!await hasStoredObject(`renders/${id}.mp4`)) return response.status(404).json({ error: 'Rendered video is no longer available.' });
     return response.json({ status: 'complete', progress: 1, downloadUrl: `/api/render-video/${id}/download` });
   }
   if (job.status === 'complete') {
     try {
-      await stat(resolve('.data', 'renders', `${id}.mp4`));
-      return response.json({ ...job, downloadUrl: `/api/render-video/${id}/download` });
+      if (await hasStoredObject(`renders/${id}.mp4`)) return response.json({ ...job, downloadUrl: `/api/render-video/${id}/download` });
     } catch { /* Report the in-memory job state if its file was removed. */ }
   }
   return response.json(job);
@@ -248,13 +257,14 @@ app.get('/api/render-video/:renderId/download', async (request, response) => {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return response.status(404).end();
   try {
     const ownedAsset = await requireDatabase().query(
-      `SELECT 1 FROM asset a JOIN project p ON p.id = a.project_id
+      `SELECT a.storage_key FROM asset a JOIN project p ON p.id = a.project_id
        WHERE a.storage_key = $1 AND p.owner_id = $2`, [`renders/${id}.mp4`, request.user!.id],
     );
     if (!ownedAsset.rowCount) return response.status(404).end();
-    const filepath = resolve('.data', 'renders', `${id}.mp4`);
-    await stat(filepath);
-    response.download(filepath, 'little-lessons.mp4');
+    const delivery = await getPrivateDownload(ownedAsset.rows[0].storage_key, 'little-lessons.mp4');
+    if (!delivery) return response.status(404).end();
+    if (delivery.kind === 'r2') return response.redirect(delivery.url);
+    response.download(delivery.filepath, 'little-lessons.mp4');
   } catch { response.status(404).end(); }
 });
 
@@ -296,19 +306,23 @@ app.post('/api/render-video', async (request, response) => {
       const serveUrl = await serveUrlPromise;
       const inputProps = {
         scenes, title: title.trim(),
-        audioSrc: audioId ? `data:audio/mpeg;base64,${(await readFile(resolve('.data', 'audio', `${audioId}.mp3`))).toString('base64')}` : undefined,
+        audioSrc: audioId ? `data:audio/mpeg;base64,${(await readStoredObject(`audio/${audioId}.mp3`)).toString('base64')}` : undefined,
         audioDurationSeconds: duration,
         sceneTimings: timings,
       };
-      const composition = await selectComposition({ serveUrl, id: 'LessonVideo', inputProps });
+      const composition = await selectComposition({ serveUrl, id: 'LessonVideo', inputProps, ...remotionBrowserOptions });
+      const videoKey = `renders/${renderId}.mp4`;
+      const videoPath = resolve('.data', videoKey);
       await renderMedia({
-        composition, serveUrl, codec: 'h264', outputLocation: resolve(renderFolder, `${renderId}.mp4`),
+        composition, serveUrl, codec: 'h264', outputLocation: videoPath, ...remotionBrowserOptions,
         inputProps, onProgress: ({ progress }) => { renderJobs.set(renderId, { status: 'rendering', progress, userId: request.user!.id, projectId }); },
       });
+      await storeFile(videoKey, videoPath, 'video/mp4');
       await requireDatabase().query(
         `INSERT INTO asset (project_id, asset_type, storage_key, media_type, provider)
-         VALUES ($1, 'FINAL_VIDEO', $2, 'video/mp4', 'REMOTION')`, [projectId, `renders/${renderId}.mp4`],
+         VALUES ($1, 'FINAL_VIDEO', $2, 'video/mp4', 'REMOTION')`, [projectId, videoKey],
       );
+      await removeLocalObject(videoKey);
       renderJobs.set(renderId, { status: 'complete', progress: 1, userId: request.user!.id, projectId });
     } catch (error) {
       console.error('Local MP4 export failed:', error instanceof Error ? error.message : 'Unknown rendering error');
@@ -328,7 +342,10 @@ app.get('/api/audio/:assetId', async (request, response) => {
        WHERE a.storage_key = $1 AND a.asset_type = 'NARRATION_AUDIO' AND p.owner_id = $2`, [`audio/${request.params.assetId}.mp3`, request.user!.id],
     );
     if (!ownedAsset.rowCount) return response.status(404).end();
-    const audio = await readFile(resolve('.data', 'audio', `${request.params.assetId}.mp3`));
+    const delivery = await getPrivateDownload(`audio/${request.params.assetId}.mp3`);
+    if (!delivery) return response.status(404).end();
+    if (delivery.kind === 'r2') return response.redirect(delivery.url);
+    const audio = await readFile(delivery.filepath);
     response.type('audio/mpeg').send(audio);
   } catch {
     response.status(404).end();
@@ -492,9 +509,7 @@ app.post('/api/generate-narration', async (request, response) => {
     });
 
     const audioId = randomUUID();
-    const audioFolder = resolve('.data', 'audio');
-    await mkdir(audioFolder, { recursive: true });
-    await writeFile(resolve(audioFolder, `${audioId}.mp3`), Buffer.from(generated.audio_base64, 'base64'));
+    await storeBuffer(`audio/${audioId}.mp3`, Buffer.from(generated.audio_base64, 'base64'), 'audio/mpeg');
     await requireDatabase().query(
       `INSERT INTO asset (project_id, asset_type, storage_key, media_type, provider, provider_model, generation_metadata)
        VALUES ($1, 'NARRATION_AUDIO', $2, 'audio/mpeg', 'ELEVENLABS', $3, $4::jsonb)`,

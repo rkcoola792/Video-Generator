@@ -89,6 +89,53 @@ body{min-width:0;background:#f7f5ef}
 .profile strong{font-size:9px}
 .profile small{font-size:8px}
 
+.player-wrap{position:relative}
+.fullscreen-toggle{position:absolute;top:12px;right:12px;z-index:4;width:34px;height:34px;border:1px solid #ffffffb8;border-radius:9px;background:#fffdf2e8;color:#42614d;box-shadow:0 2px 8px #172c3220;font:600 20px/1 'DM Sans',sans-serif;cursor:pointer;display:grid;place-items:center}
+.player-wrap:fullscreen{width:100vw;height:100dvh;min-height:0;position:fixed;inset:0;z-index:9999;display:grid;place-items:center;border:0;border-radius:0;background:#111815;box-shadow:none}
+.player-wrap:fullscreen .lesson-remotion-player{width:min(56.25dvh,100vw)!important;height:min(100dvh,177.78vw)!important;max-width:100vw;max-height:100dvh;flex:none}
+
+/* Larger type is essential in the phone-sized 9:16 render, where 1080p text scales down sharply. */
+.video-canvas .video-topline{font-size:20px;letter-spacing:2.2px}
+.video-canvas .video-topline span:first-child{max-width:78%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.video-canvas .video-kicker{font-size:20px;letter-spacing:3px}
+.video-canvas .video-title{width:100%;font-size:clamp(58px,7.2vw,78px);line-height:1.08;letter-spacing:-1.5px}
+.video-canvas .caption-card{width:88%;min-height:132px;gap:16px;padding:20px 26px;font-size:clamp(34px,4vw,44px);line-height:1.24}
+.video-canvas .caption-sparkle{font-size:34px}
+.video-canvas .video-footer{font-size:19px;letter-spacing:.5px}
+.video-canvas .video-footer span:last-child{font-size:27px}
+.video-canvas .diagram-label{font-size:30px}
+.video-canvas .equation-text{font-size:30px}
+.video-canvas .diagram-steps span{font-size:19px;line-height:1.25;padding:10px 8px}
+.video-canvas .diagram-node{min-height:132px;gap:10px;padding:17px}
+.video-canvas .diagram-node b{width:42px;height:42px;font-size:24px}
+.video-canvas .diagram-node span{font-size:28px;line-height:1.2}
+.video-canvas .cycle .diagram-node span{font-size:23px}
+.video-canvas .diagram-caption{font-size:22px;letter-spacing:2.5px}
+.video-canvas .diagram-caption i{font-size:28px}
+.video-canvas .diagram-callout{padding:18px 22px;font-size:28px;line-height:1.2}
+.video-canvas .transfer-phase .diagram-callout{font-size:25px}
+.video-canvas .number-equation{font-size:43px}
+.video-canvas .block-groups>div,.video-canvas .transfer-source{font-size:28px}
+.video-canvas .question-pulse{width:72px;height:72px;font-size:54px}
+.video-canvas .recap-equation{font-size:38px}
+.animation-style-field select{width:100%;margin-top:2px;border:1px solid #e5e6dc;border-radius:8px;background:#fffefa;padding:9px 11px;color:#40584e;font:500 11px 'DM Sans',sans-serif}
+.animation-style-field small{font-size:9px;line-height:1.45;color:#87958a}
+.video-canvas--whiteboard{color:#1f3334}
+.video-canvas--whiteboard .video-topline,.video-canvas--whiteboard .video-kicker,.video-canvas--whiteboard .video-footer{color:#465957}
+.video-canvas--whiteboard .video-title{font-family:'Segoe Print','Comic Sans MS',cursive;color:#1d3338;text-shadow:none;letter-spacing:-1px}
+.video-canvas--whiteboard .caption-card{border:3px solid #263d3a;border-radius:12px 9px 14px 10px;background:#fff;box-shadow:none;color:#233b3b;font-family:'Segoe Print','Comic Sans MS',cursive}
+.video-canvas--whiteboard .caption-sparkle{color:#d39c39}
+.whiteboard-style .diagram-shell{overflow:visible;border:0;border-radius:0;background:transparent;box-shadow:none}
+.whiteboard-style .diagram-node{border:3px solid #263d3a;border-radius:12px 9px 14px 10px;background:#fffefa;box-shadow:2px 3px 0 #263d3a18;color:#223b3c}
+.whiteboard-style .diagram-node b{border:2px solid #263d3a;background:#fff;color:#263d3a}
+.whiteboard-style .diagram-node span,.whiteboard-style .diagram-callout,.whiteboard-style .number-equation,.whiteboard-style .recap-equation{font-family:'Segoe Print','Comic Sans MS',cursive}
+.whiteboard-style .diagram-callout{border-radius:0;background:transparent;color:#253b3d;text-decoration:underline;text-decoration-color:#d7a444;text-decoration-thickness:3px;text-underline-offset:8px}
+.whiteboard-style .diagram-caption{color:#263d3a}
+.whiteboard-style .diagram-caption i,.whiteboard-style .math-sign{color:#c58b2b}
+.whiteboard-style .recap-equation{border:2px solid #263d3a;background:#fffefa;color:#223b3c}
+.whiteboard-style .triangle-line,.whiteboard-style .right-angle{stroke:#263d3a}
+.whiteboard-style .area-square{stroke:#263d3a;stroke-width:4}
+
 /* The sidebar is a fixed navigation rail, so it should never become a second scroll area. */
 @media(min-width:881px){
   .sidebar{height:100dvh;position:sticky;top:0;overflow:hidden}

@@ -21,14 +21,20 @@ Add `DATABASE_URL=postgresql://little_lessons:YOUR_PRIVATE_PASSWORD@localhost:54
 
 The API reads credentials from the server environment. They are never sent to the browser. Set `GEMINI_TEXT_MODEL` and `ELEVENLABS_MODEL_ID` in `.env` to choose supported models.
 
+## Cloudflare R2 media storage
+
+Video and narration objects use a private R2 bucket when all four R2 settings are configured in `.env`: `R2_ENDPOINT` (`https://<ACCOUNT_ID>.r2.cloudflarestorage.com`), `R2_BUCKET_NAME`, `R2_ACCESS_KEY_ID`, and `R2_SECRET_ACCESS_KEY`. Create an R2 API token with Object Read & Write permission scoped to that bucket. Keep the bucket private and keep these credentials server-side. If none of the R2 settings are present, local development continues to store media under `.data`.
+
+After configuring R2, run `npm run storage:migrate-to-r2` to copy existing audio and rendered video files from `.data` into the bucket. The migration is safe to rerun and leaves the local files in place. New narration and video renders are stored in R2; downloads are issued through short-lived private URLs after the app checks project ownership. Generated scene illustrations remain local for now.
+
 ## Included
 
 - Editable lesson topic, target audience, 30/45/60-second target, narration, and captions.
 - Five-scene starter storyboard with automatic local saving, multiple lesson drafts, and draft switching from the recent drafts list.
 - Remotion preview with animated scene diagrams, scene-timed captions, and render progress.
 - Gemini storyboard generation, returning five scenes whose durations match the selected target. When configured, Brave Search supplies a short evidence brief with references attached to relevant scenes; without it, factual claims are marked for educator review.
-- ElevenLabs voiceover generation with the configured curated voices and friendly, energetic, or calm tone, with character timing used to switch scenes in sync with speech. Generated MP3 files are stored locally under `.data/audio` and can be downloaded from the studio.
-- A guided end-to-end generation action and a separate MP4 export action that render the current edited storyboard and synced narration as an H.264 vertical video. Exports are kept under `.data/renders` and can be downloaded from the studio.
+- ElevenLabs voiceover generation with the configured curated voices and friendly, energetic, or calm tone, with character timing used to switch scenes in sync with speech. Generated MP3 files use private R2 storage when configured, with local `.data` storage as the development fallback.
+- A guided end-to-end generation action and a separate MP4 export action that render the current edited storyboard and synced narration as an H.264 vertical video. Exports use private R2 storage when configured, with local `.data` storage as the development fallback.
 
 ## Current prototype limits
 
