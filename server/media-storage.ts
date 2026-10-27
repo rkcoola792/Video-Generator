@@ -120,7 +120,7 @@ export async function removeLocalObject(key: string): Promise<void> {
   }
 }
 
-export async function getPrivateDownload(key: string, downloadFilename?: string): Promise<{ kind: 'r2'; url: string } | { kind: 'local'; filepath: string } | null> {
+export async function getPrivateDownload(key: string, downloadFilename?: string, expiresInSeconds = 600): Promise<{ kind: 'r2'; url: string } | { kind: 'local'; filepath: string } | null> {
   if (r2) {
     try {
       await r2.send(new HeadObjectCommand({ Bucket: config.bucket, Key: key }));
@@ -129,7 +129,7 @@ export async function getPrivateDownload(key: string, downloadFilename?: string)
         Bucket: config.bucket,
         Key: key,
         ...(safeFilename ? { ResponseContentDisposition: `attachment; filename="${safeFilename}"` } : {}),
-      }), { expiresIn: 600 });
+      }), { expiresIn: expiresInSeconds });
       return { kind: 'r2', url };
     } catch (error) {
       if (!isMissingObject(error)) throw error;
@@ -137,6 +137,13 @@ export async function getPrivateDownload(key: string, downloadFilename?: string)
   }
   const filepath = localMediaPath(key);
   return await localObjectExists(key) ? { kind: 'local', filepath } : null;
+}
+
+export async function getInstagramMediaUrl(key: string): Promise<string> {
+  if (!r2) throw new Error('Instagram can only fetch a finished video from R2. Configure the R2 settings, then export the video again.');
+  const delivery = await getPrivateDownload(key, undefined, 60 * 60 * 2);
+  if (!delivery || delivery.kind !== 'r2') throw new Error('The video is not available in R2 yet. Export it again before publishing.');
+  return delivery.url;
 }
 
 export function requireR2Storage(): void {

@@ -7,6 +7,8 @@ import { StoryboardEditor } from './components/StoryboardEditor';
 import { StudioSidebar } from './components/StudioSidebar';
 import { VideoPreview } from './components/VideoPreview';
 import { AuthScreen } from './components/AuthScreen';
+import { VideoLibrary, type VideoLibraryItem } from './components/VideoLibrary';
+import { VideoReviewScreen } from './components/VideoReviewScreen';
 
 type LessonDraft = {
   id: string;
@@ -28,6 +30,11 @@ export default function App() {
   const [authState, setAuthState] = useState<'loading' | 'signed_out' | 'signed_in'>('loading');
   const [account, setAccount] = useState<Account | null>(null);
   const [projectsReady, setProjectsReady] = useState(false);
+  const [activeView, setActiveView] = useState<'studio' | 'library' | 'review'>('studio');
+  const [selectedReviewAssetId, setSelectedReviewAssetId] = useState('');
+  const [libraryItems, setLibraryItems] = useState<VideoLibraryItem[]>([]);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryError, setLibraryError] = useState('');
   const [drafts, setDrafts] = useState<LessonDraft[]>([]);
   const [voices, setVoices] = useState<Array<{ voiceId: string; name: string }>>([]);
   const [activeDraftId, setActiveDraftId] = useState('');
@@ -65,7 +72,19 @@ export default function App() {
     const payload = await response.json() as { error?: string; projects?: LessonDraft[] };
     if (!response.ok || !payload.projects) throw new Error(payload.error || 'Could not load your lessons.');
     const loaded = payload.projects.length ? payload.projects : [blankDraft()];
-    setAccount(user); setDrafts(loaded); setActiveDraftId(loaded[0].id); setProjectsReady(true); setAuthState('signed_in');
+    setAccount(user); setDrafts(loaded); setActiveDraftId(loaded[0].id); setProjectsReady(true); setAuthState('signed_in'); setActiveView('studio');
+  };
+
+  const loadVideoLibrary = async () => {
+    setLibraryLoading(true); setLibraryError('');
+    try {
+      const response = await fetch('/api/v1/videos');
+      const payload = await response.json() as { error?: string; videos?: VideoLibraryItem[] };
+      if (!response.ok || !payload.videos) throw new Error(payload.error || 'Could not load your videos.');
+      setLibraryItems(payload.videos);
+    } catch (error) {
+      setLibraryError(error instanceof Error ? error.message : 'Could not load your videos.');
+    } finally { setLibraryLoading(false); }
   };
 
   const persistProjects = async (projects = drafts) => {
@@ -85,6 +104,25 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (authState !== 'signed_in') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('instagram') === 'connected') {
+      const assetId = params.get('asset');
+      if (assetId && /^[0-9a-f-]{36}$/i.test(assetId)) {
+        setSelectedReviewAssetId(assetId);
+        setActiveView('review');
+      } else setActiveView('library');
+    } else if (params.get('instagram') === 'error') {
+      setActiveView('library');
+      setNotice(params.get('message') || 'Instagram connection did not finish.');
+    }
+  }, [authState]);
+
+  useEffect(() => {
+    if (authState === 'signed_in' && activeView === 'library') void loadVideoLibrary();
+  }, [authState, activeView]);
+
+  useEffect(() => {
     if (authState !== 'signed_in' || !projectsReady || drafts.length === 0) return;
     const timer = window.setTimeout(() => {
       void persistProjects(drafts)
@@ -102,7 +140,18 @@ export default function App() {
 
   const signOut = async () => {
     await fetch('/api/v1/auth/logout', { method: 'POST' }).catch(() => undefined);
-    setAccount(null); setDrafts([]); setProjectsReady(false); setAuthState('signed_out'); setActiveDraftId('');
+    setAccount(null); setDrafts([]); setProjectsReady(false); setAuthState('signed_out'); setActiveDraftId(''); setLibraryItems([]); setActiveView('studio');
+  };
+
+  const openLibrary = () => { setActiveView('library'); setPlaying(false); playerRef.current?.pause(); };
+  const openVideoReview = (assetId: string) => {
+    setSelectedReviewAssetId(assetId); setActiveView('review'); setPlaying(false); playerRef.current?.pause();
+  };
+  const openProject = (projectId: string) => {
+    const selected = drafts.find(draft => draft.id === projectId);
+    if (!selected) return;
+    setActiveDraftId(projectId); setSelectedScene(0); setRenderDownloadUrl(selected.renderId ? `/api/render-video/${selected.renderId}/download` : '');
+    setNotice(''); setPlaying(false); playerRef.current?.pause(); setActiveView('studio');
   };
 
   const updateScene = (index: number, key: 'narration' | 'caption', value: string) => {
@@ -242,10 +291,11 @@ export default function App() {
   if (authState === 'signed_out') return <AuthScreen onAuthenticated={loadAccountProjects} />;
 
   return <div className="studio-shell">
-    <StudioSidebar drafts={drafts} activeDraftId={activeDraft.id} user={account!} onSignOut={() => { void signOut(); }} busy={generatingVideo} onSelectDraft={id => { setActiveDraftId(id); setSelectedScene(0); setRenderDownloadUrl(drafts.find(draft => draft.id === id)?.renderId ? `/api/render-video/${drafts.find(draft => draft.id === id)?.renderId}/download` : ''); setNotice(''); setPlaying(false); playerRef.current?.pause(); }} onCreateDraft={createDraft} onReset={restoreStarter} />
+    <StudioSidebar drafts={drafts} activeDraftId={activeDraft.id} activeView={activeView} onShowVideos={openLibrary} user={account!} onSignOut={() => { void signOut(); }} busy={generatingVideo} onSelectDraft={id => { openProject(id); }} onCreateDraft={() => { setActiveView('studio'); createDraft(); }} onReset={restoreStarter} />
     <main className="main-area">
-      <header className="topbar"><div className="crumb">My lessons <span>/</span> <strong>{topic}</strong></div><div className="top-actions"><span className="saved"><i /> Saved to your account</span><button className="avatar small">{account?.displayName.slice(0, 1).toUpperCase()}</button></div></header>
-      <div className="studio-content">
+      <header className="topbar"><div className="crumb">My lessons <span>/</span> <strong>{activeView === 'library' ? 'My videos' : activeView === 'review' ? 'Review & publish' : topic}</strong></div><div className="top-actions"><span className="saved"><i /> Saved to your account</span><button className="avatar small">{account?.displayName.slice(0, 1).toUpperCase()}</button></div></header>
+      {activeView === 'library' ? <VideoLibrary items={libraryItems} loading={libraryLoading} error={libraryError} onRetry={() => { void loadVideoLibrary(); }} onCreateLesson={() => { setActiveView('studio'); createDraft(); }} onOpenProject={openProject} onReviewVideo={openVideoReview} />
+        : activeView === 'review' ? <VideoReviewScreen assetId={selectedReviewAssetId} onBack={openLibrary} /> : <div className="studio-content">
         <section className="heading-row"><div><div className="eyebrow">YOUR NEXT LITTLE LESSON</div><h1>Let’s make a video <span>✳</span></h1><p>A tiny question can open up a whole world.</p></div><button className="text-button" onClick={restoreStarter}>↺ <span>Reset draft</span></button></section>
         <LessonBrief topic={topic} audience={audience} duration={targetDuration} generatingVideo={generatingVideo} drafting={generating} disabled={generatingVideo || generating} pipelineStep={pipelineStep} onGenerateVideo={generateVideo} onTopicChange={changeTopic} onAudienceChange={setAudience} onDurationChange={changeDuration} />
         <div className="work-grid">
@@ -253,7 +303,7 @@ export default function App() {
           <VideoPreview key={activeDraft.id} playerRef={playerRef} scenes={scenes} title={topic} voiceover={voiceover} tone={tone} voiceId={voiceId} voices={voices} playing={playing} durationSeconds={videoDurationSeconds} generatingVoiceover={generatingVoiceover} renderingVideo={renderingVideo} renderProgress={renderProgress} renderDownloadUrl={renderDownloadUrl} notice={notice} generatingVideo={generatingVideo} pipelineStep={pipelineStep} onToneChange={setTone} onVoiceChange={setVoiceId} onPlayToggle={() => setPlaying(value => !value)} onGenerateVoiceover={generateVoiceover} onExport={() => { void exportVideo(scenes, topic, voiceover, true).catch(() => undefined); }} />
         </div>
         <footer className="page-footer"><span>MADE WITH CURIOSITY <span>✳</span></span><button className="draft-only-button" disabled={generating || generatingVideo} onClick={generateLesson}>{generating ? <>◌ Drafting with Gemini…</> : 'Draft script only'}</button></footer>
-      </div>
+      </div>}
     </main>
   </div>;
 }

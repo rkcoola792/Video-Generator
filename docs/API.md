@@ -28,6 +28,7 @@ This document describes the HTTP API exposed by the app. The machine-readable co
 |---|---|---|
 | Health | `GET /health` | Check app availability. |
 | Projects | `GET/POST /projects`, `GET/PATCH/DELETE /projects/{projectId}` | Create and manage lesson drafts. |
+| Video library and review | `GET /videos`, `GET /videos/{assetId}/media`, `GET /videos/{assetId}/download`, `GET/PUT /videos/{assetId}/review`, `POST /videos/{assetId}/caption-suggestions` | List owned drafts and rendered MP4s, preview/download them, suggest editable post copy, and save or approve post text for one exact export. |
 | Script and storyboard | `POST /projects/{projectId}/script`, `PATCH /projects/{projectId}/storyboard` | Generate the first script/storyboard and save educator edits. |
 | Scene visuals | `POST /projects/{projectId}/scenes/{sceneId}/illustration` | Generate or regenerate one scene illustration. |
 | Narration | `POST /projects/{projectId}/narration` | Generate audio from approved script using selected voice and tone. |
@@ -35,8 +36,8 @@ This document describes the HTTP API exposed by the app. The machine-readable co
 | Video | `POST /projects/{projectId}/render`, `GET /projects/{projectId}/download` | Render and download MP4. |
 | Approval | `POST /projects/{projectId}/approvals` | Record storyboard or final-render approval. |
 | Jobs | `GET /jobs/{jobId}` | Check asynchronous task progress and result. |
-| Instagram | `POST /social/instagram/connect`, `GET /social/instagram/callback`, `GET /social/accounts`, `DELETE /social/accounts/{accountId}` | Connect and disconnect an authorized account. |
-| Calendar and posts | `GET /calendar`, `GET/POST /posts`, `GET/PATCH/DELETE /posts/{postId}`, `POST /posts/{postId}/retry` | Schedule, inspect, edit, cancel, and retry publishing. |
+| Instagram | `POST /social/instagram/connect`, `GET /social/instagram/callback`, `GET /social/accounts`, `DELETE /social/accounts/{accountId}` | Connect and disconnect an Instagram Professional account with Instagram Login. |
+| Publish now | `POST /videos/{assetId}/publish`, `GET /posts/{postId}` | Start publishing an approved video and poll for its final platform result. |
 
 ## Typical workflow
 
@@ -47,8 +48,8 @@ This document describes the HTTP API exposed by the app. The machine-readable co
 5. `POST /projects/{id}/approvals` with `stage: "storyboard"`.
 6. Start illustration generation, narration, publishing-asset generation, and render. Each returns a job ID.
 7. Preview the render, then approve with `stage: "final_render"`.
-8. `POST /posts` with the approved render, connected account, caption, hashtags, and schedule time.
-9. Inspect `/calendar`; if a post fails, inspect it and call `/posts/{postId}/retry`.
+8. `POST /videos/{assetId}/publish` with a connected Instagram account after the final publish confirmation.
+9. Poll `GET /posts/{postId}` until Instagram finishes publishing or returns a recoverable error.
 
 ## Design rules
 
@@ -63,3 +64,11 @@ This document describes the HTTP API exposed by the app. The machine-readable co
 ## Contract source
 
 See [OpenAPI 3.1 contract](api/openapi.yaml) for request/response schemas and path details. Treat it as the app API design, not generated code; implementation may add fields while preserving the contract's behavior.
+
+## Implemented library response
+
+`GET /api/v1/videos` returns `{ "videos": [...] }`. Each item is either a `video` asset with preview/download URLs or a `draft` project with an `updatedAt` timestamp. The endpoint checks media availability and scopes both project and asset queries to the authenticated owner. Rendered video bytes remain in configured R2 or the local development storage directory; PostgreSQL stores asset metadata and storage keys.
+
+`GET /api/v1/videos/{assetId}/review` returns editable caption and hashtag values and whether the exact video version can be approved. `PUT` accepts `caption`, `hashtags`, and `approve`. Saving text without approval clears any previous final-render approval; approving records approval against the immutable project version and video asset. Caption suggestions use the configured Gemini model with OpenAI fallback.
+
+Instagram Login requests `instagram_business_basic` and `instagram_business_content_publish`. OAuth state is random, hashed in PostgreSQL, short-lived, single-use, and bound to the signed-in account. Instagram access tokens are encrypted with AES-256-GCM using `TOKEN_ENCRYPTION_KEY`. Publishing uses a time-limited signed R2 video URL, creates a Reel container, polls processing, and then publishes it. Local-only media cannot be fetched by Instagram. This prototype has no scheduling worker yet.

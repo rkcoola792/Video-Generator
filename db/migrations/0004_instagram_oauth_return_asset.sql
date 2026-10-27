@@ -1,0 +1,2 @@
+ALTER TABLE oauth_state
+    ADD COLUMN IF NOT EXISTS return_asset_id UUID REFERENCES asset(id) ON DELETE SET NULL;

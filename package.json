@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"npm:api\" \"npm:vite\"",
+    "dev": "node scripts/dev-entry.mjs",
+    "dev:server": "concurrently -k \"npm:api\" \"npm:vite\"",
+    "dev:x64": "node scripts/dev-entry.mjs",
     "api": "tsx watch server/index.ts",
     "vite": "vite",
     "build": "tsc -b && vite build",

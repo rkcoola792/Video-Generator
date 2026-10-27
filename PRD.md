@@ -1,6 +1,6 @@
 # AI Educational Video Maker — PRD
 
-**Status:** Product discovery draft  
+**Status:** In implementation
 **Project context:** Personal learning project inspired by a course workflow using AI, ElevenLabs, and Remotion.  
 **Version:** 0.1
 
@@ -131,3 +131,7 @@ V1 is successful when a user can take an idea through the full workflow and:
 ## 12. Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the recommended application structure, generation workflow, data model, and staged implementation plan.
+
+## 13. Implementation tracking
+
+The current build status and agreed next steps are tracked in [docs/ROADMAP.md](docs/ROADMAP.md). The first publishing milestone is the authenticated My Videos library; Instagram review and publishing follow it in sequence.

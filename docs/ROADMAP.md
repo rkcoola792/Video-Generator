@@ -1,47 +1,54 @@
 # Project progress and next steps
 
-This checklist compares the current local prototype with the v1 plan in [PRD.md](../PRD.md). “Covered” means the feature is present in the app; “partial” means a useful first version exists but does not meet the full v1 workflow yet.
+This is the active implementation tracker for the v1 plan in [PRD.md](../PRD.md). We are proceeding in the agreed order: make each user's lessons visible first, then add Instagram review and publishing.
 
-## Covered in the prototype
+## Completed milestone: My Videos library
 
-- [x] React studio with topic, learner audience, target duration, storyboard editor, and Remotion preview.
-- [x] Generate one five-scene lesson with Gemini; enforce the selected duration and validate the returned scene structure.
-- [x] Optional Brave Search evidence with clickable references and educator fact-check flags when evidence is missing or claims need review.
-- [x] Edit scene narration and captions, add a scene, and restore the starter storyboard.
-- [x] Generate ElevenLabs narration with configured voices and friendly, energetic, or calm tone; use returned timing to align scene changes.
-- [x] Render and download a vertical MP4, and download the generated narration audio.
-- [x] Keep multiple drafts in browser local storage and switch between them on the same browser/device.
-- [x] Keep Gemini and ElevenLabs credentials on the server in environment configuration.
+- [x] Add an authenticated `GET /api/v1/videos` endpoint that combines each signed-in user's projects with their stored final video assets.
+- [x] Keep the library scoped to the current user's owned projects and assets.
+- [x] Add a My Videos page with All, Videos Ready, and Drafts filters, title search, finished-video preview, MP4 download, and links back to the studio.
+- [x] Keep projects with newer edits visible as drafts alongside their older rendered exports.
+- [x] Record newly rendered MP4 asset size and current project version metadata for the library.
+- [x] Confirm the signed-in account's live database data appears in the library (four projects loaded).
+- [ ] Verify account isolation across multiple users and confirm a completed R2 video appears as a video card.
 
-## Partially covered
+## Current milestone: review and approval
 
-- [ ] **Scene illustrations:** the server has an endpoint that can generate and store illustrations, but the studio does not call it or show a regenerate-scene control. The current video uses animated diagrams instead.
-- [ ] **Captions:** scene captions appear in the video and scene timing follows voice alignment, but there is no word-level caption timing or dedicated caption review workflow.
-- [ ] **Draft recovery:** drafts autosave locally, but are not backed up, synced, or versioned and can be lost with browser storage.
-- [ ] **Lesson review:** source links and fact-check flags are visible, but there is no explicit storyboard approval gate before narration/rendering.
-- [ ] **Rendering jobs:** the UI polls for render progress, but job state and files are local and not durable across restarts or devices.
-- [ ] **Content invalidation:** edits clear some generated assets, but there is no explicit immutable version history or reliable dependency tracking for every asset.
+- [x] Add a review screen to each finished-video card with the selected render preview and MP4 download.
+- [x] Let the user edit and save a caption and hashtags for a specific render.
+- [x] Require an educational-claims confirmation before approval and bind approval to that render's saved project version.
+- [x] Clear prior approval when the user saves changed caption or hashtag text.
+- [x] Generate editable caption and hashtag suggestions from the saved lesson (Gemini with OpenAI fallback).
+- [x] Add Instagram Login connection, encrypted token storage, and account disconnect.
+- [x] Add explicit publish confirmation and asynchronous Reel publishing status.
+- [ ] Configure the Meta developer app and verify OAuth with the user's Professional account.
+- [ ] Confirm published Reel against the user's live Instagram account and R2 media.
 
-## Not implemented yet
+## Next implementation steps
 
-- [ ] Background music mixed beneath narration.
-- [ ] Reel cover generation and editable Instagram caption/hashtags.
-- [ ] Database-backed projects, durable job queue, and shared asset storage.
-- [ ] Instagram account connection, approval-gated scheduling, calendar, publishing status, failure alerts, and retry.
-- [ ] User-facing progress and recovery for all generation steps, not only MP4 rendering.
+1. **Meta app setup and live publishing verification.** Add credentials, register the exact callback URL, and complete the Meta developer/tester setup for the connected Business or Creator account.
+2. **Scheduling and calendar.** Add a durable scheduled-post worker, timezone-aware scheduling, calendar/list views, status updates, and safe retry.
 
-## Recommended implementation order
+## Other v1 production work
 
-1. **Finish the visual production loop.** Connect the existing illustration endpoint to the studio, store the returned scene image URLs in the active draft, show generated art in the editor/preview, and add per-scene regeneration. Preserve animated diagrams as a fallback if image generation is unavailable.
-2. **Make edits and generated assets dependable.** Track which narration, illustration, and render belong to the current storyboard; invalidate only affected outputs when text, voice, tone, or visuals change. Add a clear review/approval step before production.
-3. **Add music and publishing assets.** Include a properly licensed bundled music track with a low-volume mix, then generate a Reel cover, caption, and hashtags for user review.
-4. **Move drafts and jobs out of the browser/process.** Add persistent project storage and a durable job queue so drafts, assets, progress, failures, and retries survive restarts.
-5. **Build Instagram publishing.** Verify current Meta account and media requirements, connect an eligible account, require approval of a specific render, then add scheduling, calendar, status, failure handling, and safe retry.
-6. **Polish and validate the complete workflow.** Confirm draft resume, review gates, generated assets, MP4 download, and scheduled-post state end to end before considering v1 complete.
+- [ ] Connect scene illustrations to the studio and support per-scene regeneration.
+- [ ] Add music beneath narration.
+- [x] Add caption/hashtag suggestions; users can edit and save the generated text.
+- [ ] Add a custom Reel cover.
+- [ ] Add a clear educational-content review gate.
+- [ ] Make rendering jobs durable across server restarts.
+- [ ] Improve dependency tracking so script, audio, visuals, and exports stay aligned after edits.
+- [ ] Complete end-to-end workflow validation before v1 release.
 
-## Best next feature
+## Existing capabilities
 
-Start with **Step 1: connect scene illustration generation to the studio**. The backend capability already exists, while the current user flow and video composition do not use it. Completing this will close a visible gap in the core idea-to-video journey before adding persistence or social publishing.
+- [x] Accounts and sessions, PostgreSQL-backed projects, and user-scoped project APIs.
+- [x] Generate and edit lesson scripts and storyboards; review source links and fact-check flags.
+- [x] Generate ElevenLabs narration and render vertical MP4s with Remotion.
+- [x] Store media in R2 when configured, with local storage fallback for development.
+- [x] Download the finished MP4 and narration audio.
+
+The PRD's complete v1 target remains: create and review a lesson, generate and preview its media, download it, and then approve, schedule, and monitor Instagram publication. Drafts and their assets must stay private to their owner.
 
 ## V1 completion target
 

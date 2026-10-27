@@ -148,7 +148,7 @@ CREATE TABLE social_account (
     username TEXT,
     account_type TEXT,
     encrypted_access_token TEXT NOT NULL,
-    encryption_key_version TEXT NOT NULL,
+    encryption_key_version TEXT NOT NULL DEFAULT 'v1',
     token_expires_at TIMESTAMPTZ,
     granted_scopes TEXT[] NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'CONNECTED'
@@ -194,6 +194,16 @@ CREATE UNIQUE INDEX approval_storyboard_once_idx
 CREATE UNIQUE INDEX approval_final_render_once_idx
     ON approval(project_version_id, asset_id) WHERE stage = 'FINAL_RENDER';
 
+CREATE TABLE video_review (
+    asset_id UUID PRIMARY KEY REFERENCES asset(id) ON DELETE CASCADE,
+    owner_id UUID NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+    project_id UUID NOT NULL REFERENCES project(id) ON DELETE CASCADE,
+    caption TEXT NOT NULL DEFAULT '',
+    hashtags TEXT[] NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE oauth_state (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     owner_id UUID NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
@@ -219,3 +229,4 @@ CREATE INDEX post_calendar_idx ON scheduled_post(owner_id, scheduled_at)
 CREATE INDEX post_account_status_idx ON scheduled_post(social_account_id, status, scheduled_at);
 CREATE INDEX oauth_state_expiry_idx ON oauth_state(expires_at)
     WHERE consumed_at IS NULL;
+CREATE INDEX video_review_owner_updated_idx ON video_review(owner_id, updated_at DESC);

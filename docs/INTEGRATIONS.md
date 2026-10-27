@@ -59,19 +59,19 @@ Remotion is an application library, not an external model API.
 
 Official docs: [Remotion Player](https://www.remotion.dev/docs/player), [Rendering](https://www.remotion.dev/docs/render), [Components](https://www.remotion.dev/docs/components).
 
-## 5. Instagram — authorization and scheduled publishing
+## 5. Instagram — authorization and publish now
 
-**Chosen product capability:** schedule and automatically publish approved Reels. Exact login flow and Graph API version remain implementation decisions.
+**Chosen flow:** Instagram Login for Professional (Business or Creator) accounts, then publish an approved Reel after a final user confirmation. Scheduled publishing is deferred.
 
-- Connect through Meta's supported authorization flow and request only needed permissions.
-- Keep access tokens server-side and encrypted at rest; redact them from logs.
-- Store schedules in the app database and enqueue a publish job when due.
-- Persist each publish step and reconcile uncertain outcomes before retrying to avoid duplicate posts.
-- Save caption, hashtags, cover, video asset, platform response ID, and publish status.
-- Verify account eligibility, current permissions, Reels parameters, media reachability, token behavior, and app-review requirements before enabling live publishing.
+- OAuth uses `instagram_business_basic` and `instagram_business_content_publish`; no Facebook Page link is required for the Instagram Login setup.
+- Keep access tokens server-side and encrypted at rest with `TOKEN_ENCRYPTION_KEY`; redact them from logs.
+- Build editable caption/hashtag suggestions from the saved lesson, and require approval of the exact render before posting.
+- Deliver the MP4 to Meta using a short-lived signed R2 URL, create a Reel container, poll for processing, then publish it.
+- Store connected account metadata and publish result/status in PostgreSQL. A durable retry/reconciliation worker is still future work.
+- Meta app credentials and an exact redirect URI must be configured in `.env`; live publishing also requires the app/account permissions Meta grants.
 - Keep MP4 download functional when Meta authorization is not configured.
 
-Official references: [Instagram API with Instagram Login](https://www.postman.com/meta/instagram/folder/6raa77c/instagram-api-with-instagram-login), [Content Publishing](https://developers.facebook.com/docs/instagram-platform/content-publishing).
+Official references: [Instagram API with Instagram Login](https://www.postman.com/meta/instagram/folder/6raa77c/instagram-api-with-instagram-login), [Meta's Instagram API collection](https://www.postman.com/meta/instagram/documentation/6yqw8pt/instagram-api).
 
 ## 6. Background music
 
@@ -89,6 +89,7 @@ ELEVENLABS_DEFAULT_VOICE_ID=
 INSTAGRAM_APP_ID=
 INSTAGRAM_APP_SECRET=
 INSTAGRAM_REDIRECT_URI=
+INSTAGRAM_GRAPH_API_VERSION=v26.0
 TOKEN_ENCRYPTION_KEY=
 ```
 

@@ -1,16 +1,17 @@
 import 'dotenv/config';
 import express from 'express';
 import { GoogleGenAI } from '@google/genai';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { bundle } from '@remotion/bundler';
 import { renderMedia, selectComposition } from '@remotion/renderer';
 import type { Scene } from '../src/video/lesson';
 import { clearSessionCookie, hashToken, limitAuthAttempts, loginUser, registerUser, requireAuth, sessionUser } from './auth';
 import { requireDatabase } from './database';
-import { getPrivateDownload, hasStoredObject, mediaStorageMode, readStoredObject, removeLocalObject, storeBuffer, storeFile } from './media-storage';
+import { getInstagramMediaUrl, getPrivateDownload, hasStoredObject, mediaStorageMode, readStoredObject, removeLocalObject, storeBuffer, storeFile } from './media-storage';
+import { exchangeInstagramCode, instagramAuthorizationUrl, instagramCallbackUrl, instagramConfigReady, publishInstagramReel } from './instagram';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -133,7 +134,14 @@ app.post('/api/v1/auth/logout', requireAuth, async (request, response) => {
   return response.json({ ok: true });
 });
 
-app.use('/api', requireAuth);
+// Instagram redirects back on the Meta/Cloudflare hostname, so the app's
+// localhost session cookie is not available here. The one-time OAuth state
+// record is the callback's authentication and ties the authorization to the
+// app user who started it.
+app.use('/api', (request, response, next) => {
+  if (request.method === 'GET' && request.path === '/v1/social/instagram/callback') return next();
+  return requireAuth(request, response, next);
+});
 
 app.get('/api/v1/projects', async (request, response) => {
   try {
@@ -150,6 +158,456 @@ app.get('/api/v1/projects', async (request, response) => {
   } catch (error) {
     console.error('Project list failed:', error instanceof Error ? error.message : 'Unknown error');
     return response.status(503).json({ error: 'Could not load your lessons. Check database setup and try again.' });
+  }
+});
+
+app.get('/api/v1/videos', async (request, response) => {
+  try {
+    const result = await requireDatabase().query(
+      `SELECT p.id AS "projectId", p.title, p.topic, p.audience,
+              p.target_duration_seconds AS "targetDuration", p.updated_at AS "projectUpdatedAt",
+              v.storyboard_metadata AS draft,
+              a.id AS "assetId", a.storage_key AS "storageKey", a.media_type AS "mediaType",
+              COALESCE(av.storyboard_metadata->>'topic', p.topic) AS "assetTitle",
+              av.storyboard_metadata->>'audience' AS "assetAudience",
+              COALESCE(NULLIF(av.storyboard_metadata->>'targetDuration', '')::INTEGER, p.target_duration_seconds) AS "assetDuration",
+              a.byte_size AS "byteSize", a.created_at AS "assetCreatedAt"
+       FROM project p
+       LEFT JOIN project_version v ON v.project_id = p.id AND v.is_current = TRUE
+       LEFT JOIN asset a ON a.project_id = p.id AND a.asset_type = 'FINAL_VIDEO'
+       LEFT JOIN project_version av ON av.id = a.project_version_id
+       WHERE p.owner_id = $1 AND p.deleted_at IS NULL
+       ORDER BY p.updated_at DESC, a.created_at DESC`, [request.user!.id],
+    );
+
+    type VideoRow = {
+      projectId: string; title: string; topic: string; audience: string; targetDuration: number;
+      projectUpdatedAt: Date; draft: Record<string, unknown> | null; assetId: string | null;
+      storageKey: string | null; mediaType: string | null; assetTitle: string; assetAudience: string | null;
+      assetDuration: number;
+      byteSize: string | number | null;
+      assetCreatedAt: Date | null;
+    };
+    const projects = new Map<string, { row: VideoRow; assets: VideoRow[] }>();
+    for (const row of result.rows as VideoRow[]) {
+      const project = projects.get(row.projectId) ?? { row, assets: [] };
+      if (row.assetId && row.storageKey) project.assets.push(row);
+      projects.set(row.projectId, project);
+    }
+
+    const items: Array<Record<string, unknown>> = [];
+    for (const { row, assets } of projects.values()) {
+      const availableAssets = (await Promise.all(assets.map(async asset =>
+        await hasStoredObject(asset.storageKey!) ? asset : null,
+      ))).filter((asset): asset is VideoRow => asset !== null);
+      const audience = ({ KIDS: 'Kids', TEENS: 'Teens', ADULT_BEGINNERS: 'Adult beginners' } as Record<string, string>)[row.audience] ?? 'Kids';
+      const videoIds = new Set<string>();
+      for (const asset of availableAssets) {
+        const renderId = asset.storageKey!.match(/^renders\/([0-9a-f-]{36})\.mp4$/i)?.[1] ?? null;
+        if (!renderId) continue;
+        videoIds.add(renderId);
+        items.push({
+          id: `video:${asset.assetId}`, kind: 'video', projectId: row.projectId, assetId: asset.assetId,
+          title: asset.assetTitle || row.title || 'Untitled lesson',
+          audience: ({ KIDS: 'Kids', TEENS: 'Teens', ADULT_BEGINNERS: 'Adult beginners' } as Record<string, string>)[asset.assetAudience ?? ''] ?? asset.assetAudience ?? audience,
+          durationSeconds: asset.assetDuration, createdAt: new Date(asset.assetCreatedAt!).toISOString(),
+          mediaUrl: `/api/v1/videos/${asset.assetId}/media`,
+          downloadUrl: `/api/v1/videos/${asset.assetId}/download`,
+        });
+      }
+
+      const currentRenderId = typeof row.draft?.renderId === 'string' ? row.draft.renderId : null;
+      const latestVideoAt = availableAssets.reduce((latest, asset) => Math.max(latest, new Date(asset.assetCreatedAt!).getTime()), 0);
+      const projectUpdatedAt = new Date(row.projectUpdatedAt).getTime();
+      const hasCurrentVideo = currentRenderId ? videoIds.has(currentRenderId) : latestVideoAt >= projectUpdatedAt;
+      if (!hasCurrentVideo) {
+        items.push({
+          id: `draft:${row.projectId}`, kind: 'draft', projectId: row.projectId, title: row.topic || row.title || 'Untitled lesson',
+          audience, durationSeconds: row.targetDuration, updatedAt: new Date(row.projectUpdatedAt).toISOString(),
+        });
+      }
+    }
+    items.sort((a, b) => new Date(String(b.createdAt ?? b.updatedAt)).getTime() - new Date(String(a.createdAt ?? a.updatedAt)).getTime());
+    return response.json({ videos: items });
+  } catch (error) {
+    console.error('Video library failed:', error instanceof Error ? error.message : 'Unknown error');
+    return response.status(503).json({ error: 'Could not load your videos. Check your connection and try again.' });
+  }
+});
+
+app.get('/api/v1/videos/:assetId/media', async (request, response) => {
+  if (!/^[0-9a-f-]{36}$/i.test(request.params.assetId)) return response.status(404).end();
+  try {
+    const ownedAsset = await requireDatabase().query(
+      `SELECT a.storage_key FROM asset a JOIN project p ON p.id = a.project_id
+       WHERE a.id = $1 AND a.asset_type = 'FINAL_VIDEO' AND p.owner_id = $2 AND p.deleted_at IS NULL`,
+      [request.params.assetId, request.user!.id],
+    );
+    if (!ownedAsset.rowCount) return response.status(404).end();
+    const delivery = await getPrivateDownload(ownedAsset.rows[0].storage_key);
+    if (!delivery) return response.status(404).end();
+    if (delivery.kind === 'r2') return response.redirect(delivery.url);
+    return response.type('video/mp4').sendFile(delivery.filepath);
+  } catch {
+    return response.status(404).end();
+  }
+});
+
+app.get('/api/v1/videos/:assetId/download', async (request, response) => {
+  if (!/^[0-9a-f-]{36}$/i.test(request.params.assetId)) return response.status(404).end();
+  try {
+    const ownedAsset = await requireDatabase().query(
+      `SELECT a.storage_key FROM asset a JOIN project p ON p.id = a.project_id
+       WHERE a.id = $1 AND a.asset_type = 'FINAL_VIDEO' AND p.owner_id = $2 AND p.deleted_at IS NULL`,
+      [request.params.assetId, request.user!.id],
+    );
+    if (!ownedAsset.rowCount) return response.status(404).end();
+    const delivery = await getPrivateDownload(ownedAsset.rows[0].storage_key, 'little-lessons.mp4');
+    if (!delivery) return response.status(404).end();
+    if (delivery.kind === 'r2') return response.redirect(delivery.url);
+    return response.download(delivery.filepath, 'little-lessons.mp4');
+  } catch {
+    return response.status(404).end();
+  }
+});
+
+app.get('/api/v1/videos/:assetId/review', async (request, response) => {
+  if (!/^[0-9a-f-]{36}$/i.test(request.params.assetId)) return response.status(404).end();
+  try {
+    const result = await requireDatabase().query(
+      `SELECT a.id AS "assetId", a.storage_key AS "storageKey", a.project_version_id AS "versionId",
+              a.created_at AS "createdAt", p.id AS "projectId", p.title,
+              COALESCE(av.storyboard_metadata->>'topic', p.topic) AS topic,
+              COALESCE(av.storyboard_metadata->>'audience', p.audience) AS audience,
+              COALESCE(NULLIF(av.storyboard_metadata->>'targetDuration', '')::INTEGER, p.target_duration_seconds) AS "durationSeconds",
+              COALESCE(r.caption, '') AS caption, COALESCE(r.hashtags, ARRAY[]::TEXT[]) AS hashtags,
+              r.updated_at AS "reviewUpdatedAt",
+              EXISTS (SELECT 1 FROM approval ap WHERE ap.asset_id = a.id AND ap.stage = 'FINAL_RENDER'
+                      AND ap.project_version_id = a.project_version_id) AS approved
+       FROM asset a
+       JOIN project p ON p.id = a.project_id
+       LEFT JOIN project_version av ON av.id = a.project_version_id
+       LEFT JOIN video_review r ON r.asset_id = a.id AND r.owner_id = $2
+       WHERE a.id = $1 AND a.asset_type = 'FINAL_VIDEO' AND p.owner_id = $2 AND p.deleted_at IS NULL`,
+      [request.params.assetId, request.user!.id],
+    );
+    if (!result.rowCount) return response.status(404).json({ error: 'Video not found.' });
+    const row = result.rows[0];
+    if (!await hasStoredObject(row.storageKey)) return response.status(404).json({ error: 'This video file is no longer available.' });
+    const audience = ({ KIDS: 'Kids', TEENS: 'Teens', ADULT_BEGINNERS: 'Adult beginners' } as Record<string, string>)[row.audience] ?? row.audience;
+    return response.json({ review: {
+      assetId: row.assetId, projectId: row.projectId, title: row.topic || row.title || 'Untitled lesson',
+      audience, durationSeconds: row.durationSeconds, caption: row.caption, hashtags: row.hashtags,
+      approved: row.approved, canApprove: Boolean(row.versionId),
+      approvalNote: row.versionId ? undefined : 'Re-export this video from the studio to link it to a saved lesson version before approving it.',
+      createdAt: new Date(row.createdAt).toISOString(),
+      updatedAt: row.reviewUpdatedAt ? new Date(row.reviewUpdatedAt).toISOString() : undefined,
+      mediaUrl: `/api/v1/videos/${row.assetId}/media`, downloadUrl: `/api/v1/videos/${row.assetId}/download`,
+    } });
+  } catch (error) {
+    console.error('Video review load failed:', error instanceof Error ? error.message : 'Unknown error');
+    return response.status(503).json({ error: 'Could not load this video review.' });
+  }
+});
+
+app.put('/api/v1/videos/:assetId/review', async (request, response) => {
+  if (!/^[0-9a-f-]{36}$/i.test(request.params.assetId)) return response.status(404).end();
+  const { caption, hashtags, approve } = request.body ?? {};
+  if (typeof caption !== 'string' || caption.length > 5000 || !Array.isArray(hashtags) || hashtags.length > 50
+    || !hashtags.every((tag: unknown) => typeof tag === 'string' && tag.trim().replace(/^#+/, '').length <= 100
+      && /^[\p{L}\p{N}_]+$/u.test(tag.trim().replace(/^#+/, ''))) || typeof approve !== 'boolean') {
+    return response.status(400).json({ error: 'Add a caption of up to 5,000 characters and valid hashtags, then save again.' });
+  }
+  const db = requireDatabase();
+  const client = await db.connect();
+  try {
+    const video = await client.query(
+      `SELECT a.id, a.project_id, a.project_version_id
+       FROM asset a JOIN project p ON p.id = a.project_id
+       WHERE a.id = $1 AND a.asset_type = 'FINAL_VIDEO' AND p.owner_id = $2 AND p.deleted_at IS NULL`,
+      [request.params.assetId, request.user!.id],
+    );
+    if (!video.rowCount) return response.status(404).json({ error: 'Video not found.' });
+    const versionId = video.rows[0].project_version_id as string | null;
+    if (approve && !versionId) return response.status(409).json({ error: 'Re-export this video from the studio to link it to a saved lesson version before approving it.' });
+
+    const normalizedHashtags = hashtags.map((tag: string) => tag.trim().replace(/^#+/, '')).filter(Boolean);
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO video_review (asset_id, owner_id, project_id, caption, hashtags)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (asset_id) DO UPDATE SET caption = EXCLUDED.caption, hashtags = EXCLUDED.hashtags, updated_at = now()`,
+      [video.rows[0].id, request.user!.id, video.rows[0].project_id, caption.trim(), normalizedHashtags],
+    );
+    if (versionId) {
+      await client.query(
+        `DELETE FROM approval WHERE project_version_id = $1 AND asset_id = $2 AND stage = 'FINAL_RENDER'`,
+        [versionId, video.rows[0].id],
+      );
+      if (approve) {
+        await client.query(
+          `INSERT INTO approval (project_id, project_version_id, asset_id, stage, approved_by)
+           VALUES ($1, $2, $3, 'FINAL_RENDER', $4)`,
+          [video.rows[0].project_id, versionId, video.rows[0].id, request.user!.id],
+        );
+      }
+    }
+    await client.query('COMMIT');
+    return response.json({ saved: true, approved: approve, updatedAt: new Date().toISOString() });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Video review save failed:', error instanceof Error ? error.message : 'Unknown error');
+    return response.status(503).json({ error: 'Could not save this review. Try again.' });
+  } finally { client.release(); }
+});
+
+app.post('/api/v1/videos/:assetId/caption-suggestions', async (request, response) => {
+  if (!/^[0-9a-f-]{36}$/i.test(request.params.assetId)) return response.status(404).end();
+  if (!process.env.GEMINI_API_KEY && !process.env.OPENAI_API_KEY) return response.status(503).json({ error: 'Add GEMINI_API_KEY or OPENAI_API_KEY to .env to generate caption ideas.' });
+  try {
+    const result = await requireDatabase().query(
+      `SELECT COALESCE(av.storyboard_metadata->>'topic', p.topic) AS topic,
+              COALESCE(av.storyboard_metadata->>'audience', p.audience) AS audience,
+              av.storyboard_metadata->'scenes' AS scenes
+       FROM asset a JOIN project p ON p.id = a.project_id
+       LEFT JOIN project_version av ON av.id = a.project_version_id
+       WHERE a.id = $1 AND a.asset_type = 'FINAL_VIDEO' AND p.owner_id = $2 AND p.deleted_at IS NULL`,
+      [request.params.assetId, request.user!.id],
+    );
+    if (!result.rowCount) return response.status(404).json({ error: 'Video not found.' });
+    const { topic, audience, scenes } = result.rows[0] as { topic: string; audience: string; scenes: Array<{ label?: string; narration?: string; caption?: string }> | null };
+    const lessonSummary = (scenes ?? []).map(scene => `${scene.label ?? ''}: ${scene.narration ?? scene.caption ?? ''}`).join('\n').slice(0, 7000);
+    const prompt = `Write an Instagram Reel caption and 5 to 8 relevant hashtags for this educational video. Audience: ${audience}. Topic: ${topic}. Lesson content:\n${lessonSummary}\nKeep the caption friendly, clear, useful, and accurate. Do not invent lesson facts or claim the video covers anything absent from the lesson. Return JSON only as {"caption":"...","hashtags":["...", ...]}. Hashtags should be plain words without #, short, relevant, and include a mix of broad and specific educational terms.`;
+    let generated = '';
+    if (process.env.GEMINI_API_KEY) {
+      try {
+        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+        const result = await ai.models.generateContent({
+          model: process.env.GEMINI_TEXT_MODEL || 'gemini-3.8-flash', contents: prompt,
+          config: { responseMimeType: 'application/json', responseJsonSchema: { type: 'object', properties: { caption: { type: 'string' }, hashtags: { type: 'array', items: { type: 'string' } } }, required: ['caption', 'hashtags'], additionalProperties: false } },
+        });
+        generated = result.text ?? '';
+      } catch (error) {
+        if (!process.env.OPENAI_API_KEY) throw error;
+      }
+    }
+    if (!generated && process.env.OPENAI_API_KEY) {
+      const openAiResponse = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST', headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: process.env.OPENAI_TEXT_MODEL || 'gpt-6-astra', input: prompt, text: { format: { type: 'json_schema', name: 'instagram_post_copy', strict: true, schema: { type: 'object', properties: { caption: { type: 'string' }, hashtags: { type: 'array', items: { type: 'string' } } }, required: ['caption', 'hashtags'], additionalProperties: false } } } }),
+      });
+      const payload = await openAiResponse.json() as { output?: Array<{ content?: Array<{ type?: string; text?: string }> }> };
+      if (!openAiResponse.ok) throw new Error('OpenAI caption generation failed.');
+      generated = payload.output?.flatMap(item => item.content ?? []).find(item => item.type === 'output_text')?.text ?? '';
+    }
+    const parsed = JSON.parse(generated) as { caption?: unknown; hashtags?: unknown };
+    if (typeof parsed.caption !== 'string' || !Array.isArray(parsed.hashtags)) throw new Error('Caption model returned an invalid result.');
+    const normalized = parsed.hashtags.map(tag => typeof tag === 'string' ? tag.trim().replace(/^#+/, '') : '').filter(tag => /^[\p{L}\p{N}_]+$/u.test(tag)).slice(0, 15);
+    return response.json({ caption: parsed.caption.slice(0, 5000), hashtags: [...new Set(normalized)] });
+  } catch (error) {
+    console.error('Instagram caption generation failed:', error instanceof Error ? error.message : 'Unknown error');
+    return response.status(502).json({ error: 'Could not create caption ideas. Try again or edit the post text yourself.' });
+  }
+});
+
+app.post('/api/v1/social/instagram/connect', async (request, response) => {
+  if (!instagramConfigReady()) return response.status(503).json({ error: 'Instagram setup is incomplete. Add the Meta app id, app secret, redirect URI, and token encryption key to .env, then restart the app.' });
+  try {
+    const state = randomBytes(32).toString('hex');
+    const redirectUri = instagramCallbackUrl();
+    const returnAssetId = typeof request.body?.assetId === 'string' && /^[0-9a-f-]{36}$/i.test(request.body.assetId) ? request.body.assetId : null;
+    if (returnAssetId) {
+      const ownsVideo = await requireDatabase().query(
+        `SELECT 1 FROM asset a JOIN project p ON p.id = a.project_id WHERE a.id = $1 AND a.asset_type = 'FINAL_VIDEO' AND p.owner_id = $2 AND p.deleted_at IS NULL`,
+        [returnAssetId, request.user!.id],
+      );
+      if (!ownsVideo.rowCount) return response.status(404).json({ error: 'Video not found.' });
+    }
+    await requireDatabase().query(
+      `INSERT INTO oauth_state (owner_id, state_hash, redirect_uri, return_asset_id, expires_at) VALUES ($1, $2, $3, $4, now() + interval '10 minutes')`,
+      [request.user!.id, createHash('sha256').update(state).digest('hex'), redirectUri, returnAssetId],
+    );
+    return response.json({ authorizationUrl: instagramAuthorizationUrl(state) });
+  } catch (error) {
+    console.error('Instagram connect setup failed:', error instanceof Error ? error.message : 'Unknown error');
+    return response.status(503).json({ error: 'Could not start Instagram connection. Check the Instagram settings in .env.' });
+  }
+});
+
+function redirectToApp(query: Record<string, string>): string {
+  const base = new URL(process.env.APP_BASE_URL?.trim() || 'http://localhost:5173');
+  if (base.protocol !== 'https:' && base.hostname !== 'localhost' && base.hostname !== '127.0.0.1') throw new Error('APP_BASE_URL must use HTTPS outside local development.');
+  base.pathname = '/'; base.search = ''; base.hash = '';
+  for (const [key, value] of Object.entries(query)) base.searchParams.set(key, value);
+  return base.toString();
+}
+
+app.get('/api/v1/social/instagram/callback', async (request, response) => {
+  const fail = (message: string) => response.redirect(redirectToApp({ instagram: 'error', message }));
+  if (typeof request.query.error === 'string') return fail('Instagram did not authorize the connection. You can try again.');
+  const code = typeof request.query.code === 'string' ? request.query.code : '';
+  const state = typeof request.query.state === 'string' ? request.query.state : '';
+  if (!code || !/^[a-f0-9]{64}$/i.test(state)) return fail('Instagram returned an incomplete authorization response.');
+  const db = requireDatabase();
+  const client = await db.connect();
+  try {
+    const stateHash = createHash('sha256').update(state).digest('hex');
+    await client.query('BEGIN');
+    const storedState = await client.query(
+      `SELECT id, owner_id AS "ownerId", return_asset_id AS "returnAssetId" FROM oauth_state WHERE state_hash = $1 AND redirect_uri = $2 AND expires_at > now() AND consumed_at IS NULL FOR UPDATE`,
+      [stateHash, instagramCallbackUrl()],
+    );
+    if (!storedState.rowCount) { await client.query('ROLLBACK'); return fail('Instagram connection expired. Start Connect Instagram again.'); }
+    const ownerId = storedState.rows[0].ownerId as string;
+    const returnAssetId = storedState.rows[0].returnAssetId as string | null;
+    await client.query('UPDATE oauth_state SET consumed_at = now() WHERE id = $1', [storedState.rows[0].id]);
+    await client.query('COMMIT');
+    const account = await exchangeInstagramCode(code);
+    const existing = await db.query('SELECT id, owner_id FROM social_account WHERE provider = \'INSTAGRAM\' AND platform_account_id = $1', [account.platformAccountId]);
+    if (existing.rowCount && existing.rows[0].owner_id !== ownerId) return fail('That Instagram account is already connected to a different app user.');
+    if (existing.rowCount) {
+      await db.query(
+        `UPDATE social_account SET username = $2, account_type = $3, encrypted_access_token = $4, encryption_key_version = 'v1', token_expires_at = $5, status = 'CONNECTED', updated_at = now() WHERE id = $1`,
+        [existing.rows[0].id, account.username, account.accountType, account.encryptedAccessToken, account.tokenExpiresAt],
+      );
+    } else {
+      await db.query(
+        `INSERT INTO social_account (owner_id, provider, platform_account_id, username, account_type, encrypted_access_token, encryption_key_version, token_expires_at, granted_scopes)
+         VALUES ($1, 'INSTAGRAM', $2, $3, $4, $5, 'v1', $6, ARRAY['instagram_business_basic','instagram_business_content_publish'])`,
+        [ownerId, account.platformAccountId, account.username, account.accountType, account.encryptedAccessToken, account.tokenExpiresAt],
+      );
+    }
+    return response.redirect(redirectToApp({ instagram: 'connected', ...(returnAssetId ? { asset: returnAssetId } : {}) }));
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    const rawMessage = error instanceof Error ? error.message : 'Unknown error';
+    const safeMessage = rawMessage
+      .replace(/\b(client_secret|access_token|authorization_code|code|state)\s*[:=]\s*[^\s,&]+/gi, '$1=[redacted]')
+      .slice(0, 240);
+    console.error('Instagram OAuth callback failed:', safeMessage);
+    return fail(`Instagram connection failed: ${safeMessage}`);
+  } finally { client.release(); }
+});
+
+app.get('/api/v1/social/accounts', async (request, response) => {
+  try {
+    const accounts = await requireDatabase().query(
+      `SELECT id, username, account_type AS "accountType", status, token_expires_at AS "tokenExpiresAt"
+       FROM social_account WHERE owner_id = $1 AND provider = 'INSTAGRAM' AND status <> 'DISCONNECTED' ORDER BY created_at DESC`,
+      [request.user!.id],
+    );
+    return response.json({ accounts: accounts.rows });
+  } catch (error) {
+    console.error('Instagram account list failed:', error instanceof Error ? error.message : 'Unknown error');
+    return response.status(503).json({ error: 'Could not load connected Instagram accounts.' });
+  }
+});
+
+app.delete('/api/v1/social/accounts/:accountId', async (request, response) => {
+  if (!/^[0-9a-f-]{36}$/i.test(request.params.accountId)) return response.status(404).end();
+  try {
+    const removed = await requireDatabase().query('DELETE FROM social_account WHERE id = $1 AND owner_id = $2 RETURNING id', [request.params.accountId, request.user!.id]);
+    if (!removed.rowCount) return response.status(404).json({ error: 'Instagram account not found.' });
+    return response.json({ disconnected: true });
+  } catch (error) {
+    console.error('Instagram disconnect failed:', error instanceof Error ? error.message : 'Unknown error');
+    return response.status(503).json({ error: 'Could not disconnect Instagram.' });
+  }
+});
+
+async function processInstagramPublish(postId: string) {
+  const db = requireDatabase();
+  let accountId = '';
+  try {
+    const result = await db.query(
+      `SELECT sp.owner_id AS "ownerId", sp.video_asset_id AS "assetId", sp.caption, sp.hashtags,
+              sa.id AS "accountId", sa.platform_account_id AS "platformAccountId", sa.encrypted_access_token AS "encryptedToken", sa.token_expires_at AS "tokenExpiresAt", a.storage_key AS "storageKey"
+       FROM scheduled_post sp JOIN social_account sa ON sa.id = sp.social_account_id
+       JOIN asset a ON a.id = sp.video_asset_id
+       WHERE sp.id = $1 AND sp.status = 'PUBLISHING' AND sa.status = 'CONNECTED'`, [postId],
+    );
+    if (!result.rowCount) throw new Error('The connected Instagram account is no longer available.');
+    const post = result.rows[0] as { accountId: string; platformAccountId: string; encryptedToken: string; tokenExpiresAt: Date | null; storageKey: string; caption: string; hashtags: string[] };
+    accountId = post.accountId;
+    const videoUrl = await getInstagramMediaUrl(post.storageKey);
+    const caption = [post.caption.trim(), post.hashtags.map(tag => `#${tag}`).join(' ')].filter(Boolean).join('\n\n');
+    const published = await publishInstagramReel({ accountId: post.platformAccountId, encryptedToken: post.encryptedToken, tokenExpiresAt: post.tokenExpiresAt, videoUrl, caption });
+    await db.query(
+      `UPDATE social_account SET encrypted_access_token = $2, token_expires_at = $3, updated_at = now() WHERE id = $1`,
+      [post.accountId, published.encryptedToken, published.tokenExpiresAt],
+    );
+    await db.query(
+      `UPDATE scheduled_post SET status = 'PUBLISHED', platform_post_id = $2, updated_at = now() WHERE id = $1`, [postId, published.platformPostId],
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Instagram publishing failed.';
+    const authorizationFailed = /token|secret|access.?key|authorization|oauth/i.test(message);
+    const safeMessage = authorizationFailed ? 'Instagram authorization failed. Reconnect your account and try again.' : message.slice(0, 500);
+    if (authorizationFailed && accountId) await db.query(`UPDATE social_account SET status = 'REAUTH_REQUIRED', updated_at = now() WHERE id = $1`, [accountId]);
+    await db.query(
+      `UPDATE scheduled_post SET status = 'FAILED', last_error_code = 'INSTAGRAM_PUBLISH_FAILED', last_error_message_safe = $2, updated_at = now() WHERE id = $1 AND status = 'PUBLISHING'`,
+      [postId, safeMessage],
+    );
+  }
+}
+
+app.post('/api/v1/videos/:assetId/publish', async (request, response) => {
+  if (!/^[0-9a-f-]{36}$/i.test(request.params.assetId)) return response.status(404).end();
+  const socialAccountId = typeof request.body?.socialAccountId === 'string' ? request.body.socialAccountId : '';
+  if (!/^[0-9a-f-]{36}$/i.test(socialAccountId)) return response.status(400).json({ error: 'Connect an Instagram account before publishing.' });
+  const db = requireDatabase();
+  try {
+    const video = await db.query(
+      `SELECT a.id, a.project_id AS "projectId", a.project_version_id AS "versionId", a.storage_key AS "storageKey",
+              r.caption, r.hashtags,
+              EXISTS (SELECT 1 FROM approval ap WHERE ap.asset_id = a.id AND ap.project_version_id = a.project_version_id AND ap.stage = 'FINAL_RENDER') AS approved
+       FROM asset a JOIN project p ON p.id = a.project_id
+       LEFT JOIN video_review r ON r.asset_id = a.id AND r.owner_id = p.owner_id
+       WHERE a.id = $1 AND a.asset_type = 'FINAL_VIDEO' AND p.owner_id = $2 AND p.deleted_at IS NULL`,
+      [request.params.assetId, request.user!.id],
+    );
+    if (!video.rowCount) return response.status(404).json({ error: 'Video not found.' });
+    const asset = video.rows[0] as { projectId: string; versionId: string | null; storageKey: string; caption: string; hashtags: string[]; approved: boolean };
+    if (!asset.versionId || !asset.approved) return response.status(409).json({ error: 'Save and approve this exact video and caption before publishing.' });
+    const finalCaption = [asset.caption?.trim() ?? '', (asset.hashtags ?? []).map(tag => `#${tag}`).join(' ')].filter(Boolean).join('\n\n');
+    if (finalCaption.length > 2200 || (asset.hashtags ?? []).length > 30) return response.status(400).json({ error: 'Instagram allows up to 2,200 post-text characters and 30 hashtags. Shorten the saved caption before publishing.' });
+    const account = await db.query(
+      `SELECT id FROM social_account WHERE id = $1 AND owner_id = $2 AND provider = 'INSTAGRAM' AND status = 'CONNECTED'`, [socialAccountId, request.user!.id],
+    );
+    if (!account.rowCount) return response.status(404).json({ error: 'Connect an Instagram account before publishing.' });
+    await getInstagramMediaUrl(asset.storageKey);
+    const active = await db.query(
+      `SELECT id FROM scheduled_post WHERE video_asset_id = $1 AND social_account_id = $2 AND status = 'PUBLISHING'`, [request.params.assetId, socialAccountId],
+    );
+    if (active.rowCount) return response.status(409).json({ error: 'This video is already being sent to Instagram.' });
+    const insert = await db.query(
+      `INSERT INTO scheduled_post (owner_id, project_id, project_version_id, social_account_id, video_asset_id, caption, hashtags, scheduled_at, timezone, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now(), 'UTC', 'PUBLISHING') RETURNING id`,
+      [request.user!.id, asset.projectId, asset.versionId, socialAccountId, request.params.assetId, asset.caption ?? '', asset.hashtags ?? []],
+    );
+    const postId = insert.rows[0].id as string;
+    response.status(202).json({ postId, status: 'PUBLISHING' });
+    void processInstagramPublish(postId).catch(error => console.error('Instagram publishing status could not be saved:', error instanceof Error ? error.message : 'Unknown error'));
+    return;
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') return response.status(409).json({ error: 'This video is already being sent to Instagram.' });
+    console.error('Instagram publish request failed:', error instanceof Error ? error.message : 'Unknown error');
+    return response.status(503).json({ error: error instanceof Error && /R2|video is not available/.test(error.message) ? error.message : 'Could not start Instagram publishing. Try again.' });
+  }
+});
+
+app.get('/api/v1/posts/:postId', async (request, response) => {
+  if (!/^[0-9a-f-]{36}$/i.test(request.params.postId)) return response.status(404).end();
+  try {
+    const result = await requireDatabase().query(
+      `SELECT id, status, platform_post_id AS "platformPostId", last_error_message_safe AS error, updated_at AS "updatedAt"
+       FROM scheduled_post WHERE id = $1 AND owner_id = $2`, [request.params.postId, request.user!.id],
+    );
+    if (!result.rowCount) return response.status(404).json({ error: 'Publish job not found.' });
+    return response.json({ post: result.rows[0] });
+  } catch (error) {
+    console.error('Instagram publish status failed:', error instanceof Error ? error.message : 'Unknown error');
+    return response.status(503).json({ error: 'Could not load publishing status.' });
   }
 });
 
@@ -318,9 +776,14 @@ app.post('/api/render-video', async (request, response) => {
         inputProps, onProgress: ({ progress }) => { renderJobs.set(renderId, { status: 'rendering', progress, userId: request.user!.id, projectId }); },
       });
       await storeFile(videoKey, videoPath, 'video/mp4');
+      const currentVersion = await requireDatabase().query(
+        'SELECT id FROM project_version WHERE project_id = $1 AND is_current = TRUE', [projectId],
+      );
+      const videoInfo = await stat(videoPath);
       await requireDatabase().query(
-        `INSERT INTO asset (project_id, asset_type, storage_key, media_type, provider)
-         VALUES ($1, 'FINAL_VIDEO', $2, 'video/mp4', 'REMOTION')`, [projectId, videoKey],
+        `INSERT INTO asset (project_id, project_version_id, asset_type, storage_key, media_type, byte_size, provider)
+         VALUES ($1, $2, 'FINAL_VIDEO', $3, 'video/mp4', $4, 'REMOTION')`,
+        [projectId, currentVersion.rows[0]?.id ?? null, videoKey, videoInfo.size],
       );
       await removeLocalObject(videoKey);
       renderJobs.set(renderId, { status: 'complete', progress: 1, userId: request.user!.id, projectId });

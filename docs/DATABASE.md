@@ -27,6 +27,7 @@ The proposed database is PostgreSQL. The initial DDL is [schema.sql](schema.sql)
 | `social_account` | Instagram account identity and encrypted token material. |
 | `scheduled_post` | Caption, hashtags, schedule, publish state, platform post ID. |
 | `approval` | User approval for an immutable version or final render. |
+| `video_review` | User-owned editable caption and hashtags for one final video asset before scheduling. |
 | `oauth_state` | One-time OAuth state/PKCE data and expiry for CSRF protection. |
 
 ## 3. Important constraints
